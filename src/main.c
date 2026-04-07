@@ -36,7 +36,7 @@ static void* multi_mag_worker(void* arg) {
         atomic_fetch_add_explicit(a->counter, 1, memory_order_relaxed);
         mag_mutex_unlock(a->mag);
     }
-    return NULL;
+    return nullptr;
 }
 
 static void* multi_pth_worker(void* arg) {
@@ -46,7 +46,7 @@ static void* multi_pth_worker(void* arg) {
         atomic_fetch_add_explicit(a->counter, 1, memory_order_relaxed);
         pthread_mutex_unlock(a->pth);
     }
-    return NULL;
+    return nullptr;
 }
 
 static void* multi_py_worker(void* arg) {
@@ -56,7 +56,7 @@ static void* multi_py_worker(void* arg) {
         atomic_fetch_add_explicit(a->counter, 1, memory_order_relaxed);
         PyMutex_Unlock(a->py);
     }
-    return NULL;
+    return nullptr;
 }
 
 // --- Execution Runners ---
@@ -80,7 +80,7 @@ static void profile_single_thread(void) {
     // 2. pthread_mutex
     {
         pthread_mutex_t m;
-        pthread_mutex_init(&m, NULL);
+        pthread_mutex_init(&m, nullptr);
         volatile long long counter = 0;
         uint64_t start = get_nanos();
         for (int i = 0; i < SINGLE_ITERATIONS; i++) {
@@ -118,20 +118,20 @@ static void profile_multi_thread(int threads) {
         _Atomic long long count = 0;
         MultiArg arg = { .mag = &mag, .iters = MULTI_ITERATIONS, .counter = &count };
         uint64_t start = get_nanos();
-        for (int i = 0; i < threads; i++) pthread_create(&pts[i], NULL, multi_mag_worker, &arg);
-        for (int i = 0; i < threads; i++) pthread_join(pts[i], NULL);
+        for (int i = 0; i < threads; i++) pthread_create(&pts[i], nullptr, multi_mag_worker, &arg);
+        for (int i = 0; i < threads; i++) pthread_join(pts[i], nullptr);
         printf("MagMutex:      %6.2f ns/op\n", (double)(get_nanos() - start) / total_ops);
     }
 
     // 2. pthread_mutex
     {
         pthread_mutex_t pth;
-        pthread_mutex_init(&pth, NULL);
+        pthread_mutex_init(&pth, nullptr);
         _Atomic long long count = 0;
         MultiArg arg = { .pth = &pth, .iters = MULTI_ITERATIONS, .counter = &count };
         uint64_t start = get_nanos();
-        for (int i = 0; i < threads; i++) pthread_create(&pts[i], NULL, multi_pth_worker, &arg);
-        for (int i = 0; i < threads; i++) pthread_join(pts[i], NULL);
+        for (int i = 0; i < threads; i++) pthread_create(&pts[i], nullptr, multi_pth_worker, &arg);
+        for (int i = 0; i < threads; i++) pthread_join(pts[i], nullptr);
         printf("pthread_mutex: %6.2f ns/op\n", (double)(get_nanos() - start) / total_ops);
         pthread_mutex_destroy(&pth);
     }
@@ -142,8 +142,8 @@ static void profile_multi_thread(int threads) {
         _Atomic long long count = 0;
         MultiArg arg = { .py = &py, .iters = MULTI_ITERATIONS, .counter = &count };
         uint64_t start = get_nanos();
-        for (int i = 0; i < threads; i++) pthread_create(&pts[i], NULL, multi_py_worker, &arg);
-        for (int i = 0; i < threads; i++) pthread_join(pts[i], NULL);
+        for (int i = 0; i < threads; i++) pthread_create(&pts[i], nullptr, multi_py_worker, &arg);
+        for (int i = 0; i < threads; i++) pthread_join(pts[i], nullptr);
         printf("PyMutex (3.14):%6.2f ns/op\n\n", (double)(get_nanos() - start) / total_ops);
     }
 }

@@ -32,10 +32,10 @@ typedef DWORD plat_thread_id_t;
 typedef pthread_mutex_t plat_mtx_t;
 typedef pthread_cond_t plat_cnd_t;
 typedef pthread_t plat_thread_id_t;
-#    define PLAT_MTX_INIT(m) pthread_mutex_init(m, NULL)
+#    define PLAT_MTX_INIT(m) pthread_mutex_init(m, nullptr)
 #    define PLAT_MTX_LOCK(m) pthread_mutex_lock(m)
 #    define PLAT_MTX_UNLOCK(m) pthread_mutex_unlock(m)
-#    define PLAT_CND_INIT(c) pthread_cond_init(c, NULL)
+#    define PLAT_CND_INIT(c) pthread_cond_init(c, nullptr)
 #    define PLAT_CND_WAIT(c, m) pthread_cond_wait(c, m)
 #    define PLAT_CND_SIGNAL(c) pthread_cond_signal(c)
 #    define PLAT_CND_DESTROY(c) pthread_cond_destroy(c)

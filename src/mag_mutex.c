@@ -22,6 +22,9 @@ static inline void mag_yield() {
 #endif
 }
 
+static_assert(ATOMIC_INT_LOCK_FREE == 2, "MagMutex requires always-lock-free atomics!");
+static_assert(ATOMIC_POINTER_LOCK_FREE == 2, "MagMutex parking lot requires lock-free pointers!");
+
 static inline long long get_nanos(void) {
     struct timespec ts;
     timespec_get(&ts, TIME_UTC);
