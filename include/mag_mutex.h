@@ -1,5 +1,33 @@
 #pragma once
 
+/**
+ * @file mag_mutex.h
+ * @brief MagMutex: A High-Performance, Memory-Efficient 1-Byte Mutex.
+ *
+ * DESIGN GOALS:
+ * 1. Minimal Footprint: 1 byte per mutex in Release mode (ideal for ECS/Large Object Graphs).
+ * 2. High Contention Throughput: Uses a Decoupled Unlock Protocol and Address Sharding
+ *    to eliminate "Thundering Herd" and False-Sharing bottlenecks.
+ * 3. Cross-Platform: Specialized assembly for ARM64 (Apple Silicon) and x86_64.
+ * 4. Safety: Built-in Deadlock Detection and Recursive Lock checks in Debug mode.
+ *
+ * BASIC USAGE:
+ * @code
+ *    MagMutex my_lock = { .bits = MAG_UNLOCKED }; 
+ *    // or zero-init is fine
+ *    MagMutex my_lock = {}; 
+ *
+ *    MagMutex_Lock(&my_lock);
+ *    // ... critical section ...
+ *    MagMutex_Unlock(&my_lock);
+ * @endcode
+ *
+ * INITIALIZATION:
+ * MagMutex can be zero-initialized or initialized with { .bits = MAG_UNLOCKED }.
+ * In Release mode (NDEBUG defined), the struct is exactly 8 bits. In Debug mode,
+ * the struct grows to include ownership and diagnostic metadata.
+ */
+
 #include <assert.h>
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -9,19 +37,17 @@
 #    define MAG_DEBUG 1
 #endif
 
-// Branch prediction hint
 #if defined(__GNUC__) || defined(__clang__)
 #    define MAG_LIKELY(x) __builtin_expect(!!(x), 1)
+#    define MAG_COLD __attribute__((cold))
 #    define MAG_ALWAYS_INLINE __attribute__((always_inline))
 #else
 #    define MAG_LIKELY(x) (x)
+#    define MAG_COLD
 #    define MAG_ALWAYS_INLINE
 #endif
 
 #if defined(_WIN32)
-#    ifndef WIN32_LEAN_AND_MEAN
-#        define WIN32_LEAN_AND_MEAN
-#    endif
 #    include <windows.h>
 typedef CRITICAL_SECTION plat_mtx_t;
 typedef CONDITION_VARIABLE plat_cnd_t;
@@ -52,11 +78,17 @@ typedef pthread_t plat_thread_id_t;
 #    define PLAT_THREADS_EQUAL(t1, t2) pthread_equal((t1), (t2))
 #endif
 
+// --- MagMutex States ---
+
 constexpr uint8_t MAG_UNLOCKED    = 0x00;
 constexpr uint8_t MAG_LOCKED      = 0x01;
 constexpr uint8_t MAG_HAS_WAITERS = 0x02;
 constexpr uint8_t MAG_POISONED    = 0x04;
 
+/**
+ * @struct MagMutex
+ * @brief The core mutex structure. 
+ */
 typedef struct MagMutex {
     _Atomic uint8_t bits;
 #ifdef MAG_DEBUG
@@ -66,6 +98,8 @@ typedef struct MagMutex {
     _Atomic uint64_t park_count;
 #endif
 } MagMutex;
+
+// --- Debug Prototypes ---
 
 #ifdef MAG_DEBUG
 void mag_debug_check_pre_lock(MagMutex *m);
@@ -79,31 +113,62 @@ static inline void mag_debug_pre_unlock(MagMutex *m) { (void)m; }
 static inline void mag_debug_clear_owner(MagMutex *m) { (void)m; }
 #endif
 
-void mag_mutex_lock_slow(MagMutex *m);
-void mag_mutex_unlock_slow(MagMutex *m);
 
-static inline void mag_mutex_lock(MagMutex *m) {
+MAG_COLD void MagMutex_LockSlow(MagMutex *m);
+MAG_COLD void MagMutex_UnlockSlow(MagMutex *m);
+
+// --- Public API ---
+
+/**
+ * @brief Permanently poisons the mutex. Any subsequent lock attempt will abort.
+ */
+static inline void MagMutex_Poison(MagMutex *m) {
+    atomic_fetch_or_explicit(&m->bits, MAG_POISONED, memory_order_release);
+}
+
+/**
+ * @brief Attempts to acquire the lock without blocking.
+ * @return true if acquired, false if contended.
+ */
+static inline bool MagMutex_TryLock(MagMutex *m) {
     mag_debug_check_pre_lock(m);
     uint8_t expected = MAG_UNLOCKED;
-    
-    // TTAS: Relaxed load avoids heavy CAS loop overhead if contended.
-    // Weak CAS generates no loops in ASM, letting the CPU predict the branch perfectly.
-    if (atomic_load_explicit(&m->bits, memory_order_relaxed) == MAG_UNLOCKED &&
-        atomic_compare_exchange_weak_explicit(&m->bits, &expected, MAG_LOCKED, memory_order_acquire, memory_order_relaxed)) {
+    bool success     = atomic_compare_exchange_strong_explicit(
+        &m->bits, &expected, MAG_LOCKED, memory_order_acquire, memory_order_relaxed);
+    if (success) {
+        mag_debug_post_lock(m);
+    }
+    return success;
+}
+
+/**
+ * @brief Acquires the lock. Blocks if the lock is held by another thread.
+ * Uses an adaptive spin-then-park strategy.
+ */
+static MAG_ALWAYS_INLINE inline void MagMutex_Lock(MagMutex *m) {
+    mag_debug_check_pre_lock(m);
+    uint8_t expected = MAG_UNLOCKED;
+    // Fast-path: Uncontended Acquire
+    if (MAG_LIKELY(atomic_compare_exchange_strong_explicit(&m->bits, &expected, MAG_LOCKED, 
+                                                           memory_order_acquire, memory_order_relaxed))) {
         mag_debug_post_lock(m);
         return;
     }
-    mag_mutex_lock_slow(m);
+    MagMutex_LockSlow(m);
 }
 
-static inline void mag_mutex_unlock(MagMutex *m) {
+/**
+ * @brief Releases the lock. Wakes one waiting thread if necessary.
+ */
+static MAG_ALWAYS_INLINE inline void MagMutex_Unlock(MagMutex *m) {
     mag_debug_pre_unlock(m);
     mag_debug_clear_owner(m); 
-
+    
     uint8_t expected = MAG_LOCKED;
-    if (atomic_load_explicit(&m->bits, memory_order_relaxed) == MAG_LOCKED &&
-        atomic_compare_exchange_weak_explicit(&m->bits, &expected, MAG_UNLOCKED, memory_order_release, memory_order_relaxed)) {
+    // Fast-path: Uncontended Release
+    if (MAG_LIKELY(atomic_compare_exchange_strong_explicit(&m->bits, &expected, MAG_UNLOCKED, 
+                                                           memory_order_release, memory_order_relaxed))) {
         return;
     }
-    mag_mutex_unlock_slow(m);
+    MagMutex_UnlockSlow(m);
 }

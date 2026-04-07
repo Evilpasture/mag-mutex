@@ -1,12 +1,12 @@
 #define PY_SSIZE_T_CLEAN
-#include <Python.h>
 #include "mag_mutex.h"
+#include <Python.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <pthread.h>
 #include <time.h>
-#include <stdint.h>
-#include <stdatomic.h>
 
 static constexpr int SINGLE_ITERATIONS = 10000000;
 static constexpr int MULTI_ITERATIONS  = 1000000;
@@ -29,18 +29,18 @@ typedef struct {
     _Atomic long long *counter;
 } MultiArg;
 
-static void* multi_mag_worker(void* arg) {
-    MultiArg *a = (MultiArg*)arg;
+static void *multi_mag_worker(void *arg) {
+    MultiArg *a = (MultiArg *)arg;
     for (int i = 0; i < a->iters; i++) {
-        mag_mutex_lock(a->mag);
+        MagMutex_Lock(a->mag);
         atomic_fetch_add_explicit(a->counter, 1, memory_order_relaxed);
-        mag_mutex_unlock(a->mag);
+        MagMutex_Unlock(a->mag);
     }
     return nullptr;
 }
 
-static void* multi_pth_worker(void* arg) {
-    MultiArg *a = (MultiArg*)arg;
+static void *multi_pth_worker(void *arg) {
+    MultiArg *a = (MultiArg *)arg;
     for (int i = 0; i < a->iters; i++) {
         pthread_mutex_lock(a->pth);
         atomic_fetch_add_explicit(a->counter, 1, memory_order_relaxed);
@@ -49,8 +49,8 @@ static void* multi_pth_worker(void* arg) {
     return nullptr;
 }
 
-static void* multi_py_worker(void* arg) {
-    MultiArg *a = (MultiArg*)arg;
+static void *multi_py_worker(void *arg) {
+    MultiArg *a = (MultiArg *)arg;
     for (int i = 0; i < a->iters; i++) {
         PyMutex_Lock(a->py);
         atomic_fetch_add_explicit(a->counter, 1, memory_order_relaxed);
@@ -63,16 +63,16 @@ static void* multi_py_worker(void* arg) {
 
 static void profile_single_thread(void) {
     printf("--- Single Thread (Uncontended) ---\n");
-    
+
     // 1. MagMutex
     {
-        MagMutex m = { .bits = MAG_UNLOCKED };
-        volatile long long counter = 0; 
-        uint64_t start = get_nanos();
+        MagMutex m                 = {.bits = MAG_UNLOCKED};
+        volatile long long counter = 0;
+        uint64_t start             = get_nanos();
         for (int i = 0; i < SINGLE_ITERATIONS; i++) {
-            mag_mutex_lock(&m);
+            MagMutex_Lock(&m);
             counter++;
-            mag_mutex_unlock(&m);
+            MagMutex_Unlock(&m);
         }
         printf("MagMutex:      %6.2f ns/op\n", (double)(get_nanos() - start) / SINGLE_ITERATIONS);
     }
@@ -82,7 +82,7 @@ static void profile_single_thread(void) {
         pthread_mutex_t m;
         pthread_mutex_init(&m, nullptr);
         volatile long long counter = 0;
-        uint64_t start = get_nanos();
+        uint64_t start             = get_nanos();
         for (int i = 0; i < SINGLE_ITERATIONS; i++) {
             pthread_mutex_lock(&m);
             counter++;
@@ -94,9 +94,9 @@ static void profile_single_thread(void) {
 
     // 3. PyMutex
     {
-        PyMutex m = {0}; // PyMutex is zero-initialized
+        PyMutex m                  = {0}; // PyMutex is zero-initialized
         volatile long long counter = 0;
-        uint64_t start = get_nanos();
+        uint64_t start             = get_nanos();
         for (int i = 0; i < SINGLE_ITERATIONS; i++) {
             PyMutex_Lock(&m);
             counter++;
@@ -114,12 +114,14 @@ static void profile_multi_thread(int threads) {
 
     // 1. MagMutex
     {
-        MagMutex mag = { .bits = MAG_UNLOCKED };
+        MagMutex mag            = {.bits = MAG_UNLOCKED};
         _Atomic long long count = 0;
-        MultiArg arg = { .mag = &mag, .iters = MULTI_ITERATIONS, .counter = &count };
-        uint64_t start = get_nanos();
-        for (int i = 0; i < threads; i++) pthread_create(&pts[i], nullptr, multi_mag_worker, &arg);
-        for (int i = 0; i < threads; i++) pthread_join(pts[i], nullptr);
+        MultiArg arg            = {.mag = &mag, .iters = MULTI_ITERATIONS, .counter = &count};
+        uint64_t start          = get_nanos();
+        for (int i = 0; i < threads; i++)
+            pthread_create(&pts[i], nullptr, multi_mag_worker, &arg);
+        for (int i = 0; i < threads; i++)
+            pthread_join(pts[i], nullptr);
         printf("MagMutex:      %6.2f ns/op\n", (double)(get_nanos() - start) / total_ops);
     }
 
@@ -128,28 +130,32 @@ static void profile_multi_thread(int threads) {
         pthread_mutex_t pth;
         pthread_mutex_init(&pth, nullptr);
         _Atomic long long count = 0;
-        MultiArg arg = { .pth = &pth, .iters = MULTI_ITERATIONS, .counter = &count };
-        uint64_t start = get_nanos();
-        for (int i = 0; i < threads; i++) pthread_create(&pts[i], nullptr, multi_pth_worker, &arg);
-        for (int i = 0; i < threads; i++) pthread_join(pts[i], nullptr);
+        MultiArg arg            = {.pth = &pth, .iters = MULTI_ITERATIONS, .counter = &count};
+        uint64_t start          = get_nanos();
+        for (int i = 0; i < threads; i++)
+            pthread_create(&pts[i], nullptr, multi_pth_worker, &arg);
+        for (int i = 0; i < threads; i++)
+            pthread_join(pts[i], nullptr);
         printf("pthread_mutex: %6.2f ns/op\n", (double)(get_nanos() - start) / total_ops);
         pthread_mutex_destroy(&pth);
     }
 
     // 3. PyMutex
     {
-        PyMutex py = {0};
+        PyMutex py              = {0};
         _Atomic long long count = 0;
-        MultiArg arg = { .py = &py, .iters = MULTI_ITERATIONS, .counter = &count };
-        uint64_t start = get_nanos();
-        for (int i = 0; i < threads; i++) pthread_create(&pts[i], nullptr, multi_py_worker, &arg);
-        for (int i = 0; i < threads; i++) pthread_join(pts[i], nullptr);
+        MultiArg arg            = {.py = &py, .iters = MULTI_ITERATIONS, .counter = &count};
+        uint64_t start          = get_nanos();
+        for (int i = 0; i < threads; i++)
+            pthread_create(&pts[i], nullptr, multi_py_worker, &arg);
+        for (int i = 0; i < threads; i++)
+            pthread_join(pts[i], nullptr);
         printf("PyMutex (3.14):%6.2f ns/op\n\n", (double)(get_nanos() - start) / total_ops);
     }
 }
 
 int main(void) {
-    // Necessary for PyMutex if using more advanced features, 
+    // Necessary for PyMutex if using more advanced features,
     // but raw PyMutex_Lock should work after basic init.
     Py_Initialize();
 
@@ -158,7 +164,7 @@ int main(void) {
     profile_single_thread();
     profile_multi_thread(2);
     profile_multi_thread(8);
-    
+
     Py_Finalize();
     return 0;
 }
