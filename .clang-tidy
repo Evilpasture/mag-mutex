@@ -1,0 +1,64 @@
+---
+# MagMutex Clang-Tidy Configuration
+# Optimized for high-performance C system libraries
+
+# Enable all useful checks, then specifically disable the noisy or irrelevant ones
+Checks: >
+  -*,
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  concurrency-*,
+  misc-*,
+  modernize-*,
+  performance-*,
+  readability-*,
+  -bugprone-easily-swappable-parameters,
+  -modernize-use-trailing-return-type,
+  -readability-function-cognitive-complexity,
+  -readability-braces-around-statements,
+  -readability-magic-numbers,
+  -readability-else-after-return,
+  -readability-isolate-declaration
+
+# Treat all enabled warnings as errors to keep the engine pristine
+WarningsAsErrors: "*"
+
+HeaderFilterRegex: '.*mag_mutex\.h'
+
+CheckOptions:
+  # 1. Naming Conventions: Strict 'mag_' prefix enforcement
+  - key:             readability-identifier-naming.FunctionCase
+    value:           lower_case
+  - key:             readability-identifier-naming.FunctionPrefix
+    value:           mag_
+  - key:             readability-identifier-naming.StructCase
+    value:           PascalCase
+  - key:             readability-identifier-naming.StructPrefix
+    value:           Mag
+  - key:             readability-identifier-naming.ConstantCase
+    value:           UPPER_CASE
+  - key:             readability-identifier-naming.ConstantPrefix
+    value:           MAG_
+  - key:             readability-identifier-naming.MacroDefinitionCase
+    value:           UPPER_CASE
+  - key:             readability-identifier-naming.MacroDefinitionPrefix
+    value:           MAG_
+
+  # 2. Performance & Modernization
+  - key:             performance-move-const-arg.CheckTrivialTypes
+    value:           true
+  - key:             modernize-use-nullptr.NullMacros
+    value:           "NULL,nullptr"
+
+  # 3. Concurrency Checks
+  - key:             concurrency-mt-unsafe.FunctionSet
+    value:           posix # Check for thread-unsafe functions like strtok, getenv, etc.
+
+# Enable detailed analysis for the parking lot logic
+ClangTidyConfigs:
+  clang-analyzer-core.DivideZero: true
+  clang-analyzer-core.NullDereference: true
+  clang-analyzer-core.UndefinedBinaryOpResult: true
+  clang-analyzer-unix.Malloc: true
+  clang-analyzer-valist.Uninitialized: true
