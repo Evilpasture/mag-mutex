@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <time.h>
 
-static constexpr int MAX_SPIN_COUNT = 60;
+static constexpr int MAX_SPIN_COUNT = 100;
 
 // Address sharding for the parking lot to eliminate false-sharing lock
 // contention. 256 buckets padded to Apple Silicon / Modern x86 strict
@@ -228,7 +228,12 @@ MAG_COLD void MagMutex_LockSlow(MagMutex *m) {
         PLAT_MTX_LOCK(&bucket->mutex);
 
         v = atomic_load_explicit(&m->bits, memory_order_relaxed);
-        if (!(v & MAG_LOCKED) || !(v & MAG_HAS_WAITERS) || (v & MAG_POISONED)) {
+        // Define the "Required State" for parking:
+        // Must be LOCKED and have WAITERS bit set, and NOT poisoned.
+        constexpr uint8_t PARK_MASK = MAG_LOCKED | MAG_HAS_WAITERS | MAG_POISONED;
+        constexpr uint8_t PARK_EXPECTED = MAG_LOCKED | MAG_HAS_WAITERS;
+        // Single branch: If the state is anything other than (LOCKED | WAITERS), bail.
+        if (MAG_LIKELY((v & PARK_MASK) != PARK_EXPECTED)) {
             PLAT_MTX_UNLOCK(&bucket->mutex);
             PLAT_CND_DESTROY(&node.cond);
             continue;
