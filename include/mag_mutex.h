@@ -13,9 +13,9 @@
  *
  * BASIC USAGE:
  * @code
- *    MagMutex my_lock = { .bits = MAG_UNLOCKED }; 
+ *    MagMutex my_lock = { .bits = MAG_UNLOCKED };
  *    // or zero-init is fine
- *    MagMutex my_lock = {}; 
+ *    MagMutex my_lock = {};
  *
  *    MagMutex_Lock(&my_lock);
  *    // ... critical section ...
@@ -87,7 +87,7 @@ constexpr uint8_t MAG_POISONED    = 0x04;
 
 /**
  * @struct MagMutex
- * @brief The core mutex structure. 
+ * @brief The core mutex structure.
  */
 typedef struct MagMutex {
     _Atomic uint8_t bits;
@@ -113,7 +113,6 @@ static inline void mag_debug_pre_unlock(MagMutex *m) { (void)m; }
 static inline void mag_debug_clear_owner(MagMutex *m) { (void)m; }
 #endif
 
-
 MAG_COLD void MagMutex_LockSlow(MagMutex *m);
 MAG_COLD void MagMutex_UnlockSlow(MagMutex *m);
 
@@ -130,6 +129,7 @@ static inline void MagMutex_Poison(MagMutex *m) {
  * @brief Attempts to acquire the lock without blocking.
  * @return true if acquired, false if contended.
  */
+[[gnu::flatten]] [[gnu::hot]] [[gnu::always_inline]] [[gnu::artificial]] [[gnu::leaf]]
 static inline bool MagMutex_TryLock(MagMutex *m) {
     mag_debug_check_pre_lock(m);
     uint8_t expected = MAG_UNLOCKED;
@@ -145,12 +145,13 @@ static inline bool MagMutex_TryLock(MagMutex *m) {
  * @brief Acquires the lock. Blocks if the lock is held by another thread.
  * Uses an adaptive spin-then-park strategy.
  */
-static MAG_ALWAYS_INLINE inline void MagMutex_Lock(MagMutex *m) {
+[[gnu::flatten]] [[gnu::hot]] [[gnu::always_inline]] [[gnu::artificial]] [[gnu::leaf]]
+static inline void MagMutex_Lock(MagMutex *m) {
     mag_debug_check_pre_lock(m);
     uint8_t expected = MAG_UNLOCKED;
     // Fast-path: Uncontended Acquire
-    if (MAG_LIKELY(atomic_compare_exchange_strong_explicit(&m->bits, &expected, MAG_LOCKED, 
-                                                           memory_order_acquire, memory_order_relaxed))) {
+    if (MAG_LIKELY(atomic_compare_exchange_strong_explicit(
+            &m->bits, &expected, MAG_LOCKED, memory_order_acquire, memory_order_relaxed))) {
         mag_debug_post_lock(m);
         return;
     }
@@ -160,14 +161,15 @@ static MAG_ALWAYS_INLINE inline void MagMutex_Lock(MagMutex *m) {
 /**
  * @brief Releases the lock. Wakes one waiting thread if necessary.
  */
-static MAG_ALWAYS_INLINE inline void MagMutex_Unlock(MagMutex *m) {
+[[gnu::flatten]] [[gnu::hot]] [[gnu::always_inline]] [[gnu::artificial]] [[gnu::leaf]]
+static inline void MagMutex_Unlock(MagMutex *m) {
     mag_debug_pre_unlock(m);
-    mag_debug_clear_owner(m); 
-    
+    mag_debug_clear_owner(m);
+
     uint8_t expected = MAG_LOCKED;
     // Fast-path: Uncontended Release
-    if (MAG_LIKELY(atomic_compare_exchange_strong_explicit(&m->bits, &expected, MAG_UNLOCKED, 
-                                                           memory_order_release, memory_order_relaxed))) {
+    if (MAG_LIKELY(atomic_compare_exchange_strong_explicit(
+            &m->bits, &expected, MAG_UNLOCKED, memory_order_release, memory_order_relaxed))) {
         return;
     }
     MagMutex_UnlockSlow(m);
