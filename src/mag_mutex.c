@@ -257,8 +257,18 @@ void mag_mutex_lock_slow(MagMutex *m) {
 }
 
 void mag_mutex_unlock_slow(MagMutex *m) {
-    // Note: The MAG_LOCKED bit was already cleared by mag_mutex_unlock before calling this.
-    // We strictly only need to wake up one waiter and clean up MAG_HAS_WAITERS.
+    // Decoupled Unlock: Drop the locked bit immediately so spinning threads can steal it.
+    uint8_t v = atomic_load_explicit(&m->bits, memory_order_relaxed);
+    for (;;) {
+        uint8_t desired = v & ~MAG_LOCKED;
+        if (atomic_compare_exchange_weak_explicit(&m->bits, &v, desired, memory_order_release, memory_order_relaxed)) {
+            // If there are no waiters to wake, we're done (e.g., CAS failed spuriously in fast-path)
+            if (!(v & MAG_HAS_WAITERS)) {
+                return;
+            }
+            break;
+        }
+    }
 
     size_t hash    = hash_address(m);
     Bucket *bucket = &parking_lot[hash];
@@ -281,9 +291,8 @@ void mag_mutex_unlock_slow(MagMutex *m) {
         curr = &((*curr)->next);
     }
 
-    // If we popped the last waiter, clean up the HAS_WAITERS bit
     if (!more_waiters) {
-        uint8_t v = atomic_load_explicit(&m->bits, memory_order_relaxed);
+        v = atomic_load_explicit(&m->bits, memory_order_relaxed);
         for (;;) {
             if (atomic_compare_exchange_weak_explicit(&m->bits, &v, v & ~MAG_HAS_WAITERS, memory_order_relaxed, memory_order_relaxed)) {
                 break;
@@ -291,7 +300,6 @@ void mag_mutex_unlock_slow(MagMutex *m) {
         }
     }
 
-    // Signal the thread while holding the bucket lock to guarantee node.cond exists
     if (to_wake != nullptr) {
         atomic_store_explicit(&to_wake->signaled, true, memory_order_release);
         PLAT_CND_SIGNAL(&to_wake->cond);

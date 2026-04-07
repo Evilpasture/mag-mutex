@@ -9,11 +9,13 @@
 #    define MAG_DEBUG 1
 #endif
 
-// Compiler hint for branch prediction to keep the fast path straight
+// Branch prediction hint
 #if defined(__GNUC__) || defined(__clang__)
 #    define MAG_LIKELY(x) __builtin_expect(!!(x), 1)
+#    define MAG_ALWAYS_INLINE __attribute__((always_inline))
 #else
 #    define MAG_LIKELY(x) (x)
+#    define MAG_ALWAYS_INLINE
 #endif
 
 #if defined(_WIN32)
@@ -82,10 +84,12 @@ void mag_mutex_unlock_slow(MagMutex *m);
 
 static inline void mag_mutex_lock(MagMutex *m) {
     mag_debug_check_pre_lock(m);
-    
     uint8_t expected = MAG_UNLOCKED;
-    // Ultra-optimized Fast-Path: Matches PyMutex 1.7ns speed
-    if (MAG_LIKELY(atomic_compare_exchange_strong_explicit(&m->bits, &expected, MAG_LOCKED, memory_order_acquire, memory_order_relaxed))) {
+    
+    // TTAS: Relaxed load avoids heavy CAS loop overhead if contended.
+    // Weak CAS generates no loops in ASM, letting the CPU predict the branch perfectly.
+    if (atomic_load_explicit(&m->bits, memory_order_relaxed) == MAG_UNLOCKED &&
+        atomic_compare_exchange_weak_explicit(&m->bits, &expected, MAG_LOCKED, memory_order_acquire, memory_order_relaxed)) {
         mag_debug_post_lock(m);
         return;
     }
@@ -97,20 +101,9 @@ static inline void mag_mutex_unlock(MagMutex *m) {
     mag_debug_clear_owner(m); 
 
     uint8_t expected = MAG_LOCKED;
-    // Ultra-optimized Fast-Path: No Waiters
-    if (MAG_LIKELY(atomic_compare_exchange_strong_explicit(&m->bits, &expected, MAG_UNLOCKED, memory_order_release, memory_order_relaxed))) {
+    if (atomic_load_explicit(&m->bits, memory_order_relaxed) == MAG_LOCKED &&
+        atomic_compare_exchange_weak_explicit(&m->bits, &expected, MAG_UNLOCKED, memory_order_release, memory_order_relaxed)) {
         return;
     }
-
-    // Decoupled Slow-Path: Drop the lock bit immediately so others can steal it, 
-    // then dive into slow-path purely to wake a thread up.
-    for (;;) {
-        uint8_t desired = expected & ~MAG_LOCKED;
-        if (atomic_compare_exchange_weak_explicit(&m->bits, &expected, desired, memory_order_release, memory_order_relaxed)) {
-            if (expected & MAG_HAS_WAITERS) {
-                mag_mutex_unlock_slow(m);
-            }
-            return;
-        }
-    }
+    mag_mutex_unlock_slow(m);
 }
