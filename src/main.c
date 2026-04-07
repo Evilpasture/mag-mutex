@@ -102,7 +102,16 @@ static void profile_single_thread(void) {
             counter++;
             PyMutex_Unlock(&m);
         }
-        printf("PyMutex (3.14):%6.2f ns/op\n\n", (double)(get_nanos() - start) / SINGLE_ITERATIONS);
+        printf("PyMutex (3.14):%6.2f ns/op\n", (double)(get_nanos() - start) / SINGLE_ITERATIONS);
+    }
+    // 4. Naive single-threaded code
+    {
+        volatile long long counter = 0;
+        uint64_t start = get_nanos();
+        for (auto i = 0; i <SINGLE_ITERATIONS; i++) {
+            counter++;
+        }
+        printf("Naive:         %6.2f ns/op\n\n", (double)(get_nanos() - start) / SINGLE_ITERATIONS);
     }
 }
 
@@ -163,6 +172,7 @@ int main(void) {
 
     profile_single_thread();
     profile_multi_thread(2);
+    profile_multi_thread(4);
     profile_multi_thread(8);
 
     Py_Finalize();
