@@ -61,9 +61,33 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
         -Wthread-safety
     )
 
-    target_compile_options(mag_mutex_lib PRIVATE ${DISCIPLINE_FLAGS})
-    target_compile_options(MagMutex PRIVATE ${DISCIPLINE_FLAGS})
-    target_compile_options(mag_mutex_lib PRIVATE -Werror=atomic-implicit-seq-cst)
+    set(FAST_FLAGS
+        -O3
+        -fno-stack-protector
+        -flto=thin
+        -fomit-frame-pointer
+    )
+
+    target_compile_options(mag_mutex_lib PRIVATE ${DISCIPLINE_FLAGS} ${FAST_FLAGS})
+    target_compile_options(MagMutex PRIVATE ${DISCIPLINE_FLAGS} ${FAST_FLAGS})
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang")
+        target_compile_options(mag_mutex_lib PRIVATE 
+            -O3 
+            -mcpu=native 
+            -flto=thin
+            -fomit-frame-pointer
+            -Werror=atomic-implicit-seq-cst
+        )
+        # Linker needs LTO flags too
+        target_link_options(mag_mutex_lib PUBLIC -flto=thin)
+    endif()
+endif()
+
+include(CheckIPOSupported)
+check_ipo_supported(RESULT supported OUTPUT error)
+if(supported)
+    set_property(TARGET mag_mutex_lib PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+    set_property(TARGET MagMutex PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
 endif()
 
 # --- 5. Thread Sanitizer (TSan) ---
