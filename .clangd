@@ -1,0 +1,23 @@
+CompileFlags:
+  CompilationDatabase: build
+  Add: 
+    - -std=c23
+    - -Wall
+    - -Wextra
+    - -Wpedantic
+    # --- Atomic & Performance Protections ---
+    - -Watomic-implicit-seq-cst    # Errors if you forget _explicit (defaults to seq_cst)
+    - -Wshadow                     # Prevents local vars from hiding globals/outer scope
+    - -Wimplicit-fallthrough       # Safety for switch statements
+    - -Wcast-align                 # Important for pointer hashing/alignment logic
+    - -Wstrict-prototypes          # Ensures function declarations are strict
+    - -Wno-unused-parameter        # Optional: silences the argv warning from before
+
+Index:
+  Background: Build
+
+InlayHints:
+  Enabled: Yes
+  ParameterNames: Yes
+  DeducedTypes: Yes
+  Designators: Yes
