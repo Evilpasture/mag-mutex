@@ -174,6 +174,7 @@ int main(void) {
     profile_multi_thread(2);
     profile_multi_thread(4);
     profile_multi_thread(8);
+    profile_multi_thread(16);
 
     Py_Finalize();
     return 0;
