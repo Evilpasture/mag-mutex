@@ -6,12 +6,17 @@ MagMutex is a "Parking Lot" style synchronization primitive designed for high-co
 
 ## Performance Profile
 
-### Mutex Contention Scaling
-![Scaling Plot](scaling_plot.png)
+<p align="center">
+  <img src="scaling_plot.png" width="800px" alt="Scaling Plot">
+  <br>
+  <em>Figure 1: Mutex Contention Scaling (Tail Latency). MagMutex shows superior throughput in the 1-8 thread range.</em>
+</p>
 
-### Latency Distribution (16 Threads)
-![Distribution Plot](distribution_plot.png)
-
+<p align="center">
+  <img src="distribution_plot.png" width="800px" alt="Distribution Plot">
+  <br>
+  <em>Figure 2: Latency Distribution at 16 Threads. Note the tight variance of MagMutex compared to PyMutex.</em>
+</p>
 ## Key Features
 
 - **Minimal Footprint:** Exactly 8 bits per mutex (Release mode). Ideal for protecting millions of small objects.
