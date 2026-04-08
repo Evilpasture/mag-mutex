@@ -135,7 +135,7 @@ void mag_debug_pre_unlock(MagMutex *m) {
 
 typedef struct Waiter Waiter;
 struct Waiter {
-    const MagMutex *address;
+    const void *address; 
     plat_cnd_t cond;
     _Atomic bool signaled;
     Waiter *next;
@@ -164,7 +164,7 @@ static void init_parking_lot() {
     }
 }
 
-static inline size_t hash_address(const MagMutex *addr) {
+static inline size_t hash_address(const void *addr) {
     uintptr_t x = (uintptr_t)addr;
     x ^= x >> 33;
     x *= 0xff51afd7ed558ccdULL;
@@ -315,6 +315,120 @@ void MagMutex_UnlockSlow(MagMutex *m) {
     if (to_wake != nullptr) {
         atomic_store_explicit(&to_wake->signaled, true, memory_order_release);
         PLAT_CND_SIGNAL(&to_wake->cond);
+    }
+    PLAT_MTX_UNLOCK(&bucket->mutex);
+}
+
+// ============================================================================
+// MagCond Implementation
+// ============================================================================
+
+void MagCond_Wait(MagCond *cv, MagMutex *m) {
+    size_t hash    = hash_address(cv);
+    Bucket *bucket = &parking_lot[hash];
+
+    Waiter node = {.address = cv, .next = nullptr};
+    atomic_init(&node.signaled, false);
+    PLAT_CND_INIT(&node.cond);
+
+    // Fast-path bit: let signalers know someone is waiting
+    atomic_store_explicit(&cv->bits, 1, memory_order_relaxed);
+
+    // Step 1: Enqueue our waiter node FIRST
+    PLAT_MTX_LOCK(&bucket->mutex);
+    node.next    = bucket->head;
+    bucket->head = &node;
+    PLAT_MTX_UNLOCK(&bucket->mutex);
+
+    // Step 2: Safely unlock the user's mutex.
+    // Any Thread calling Signal after this point will find our node.
+    MagMutex_Unlock(m);
+
+    // Step 3: Wait for the signal
+    PLAT_MTX_LOCK(&bucket->mutex);
+    while (!atomic_load_explicit(&node.signaled, memory_order_acquire)) {
+        PLAT_CND_WAIT(&node.cond, &bucket->mutex);
+    }
+    PLAT_MTX_UNLOCK(&bucket->mutex);
+
+    PLAT_CND_DESTROY(&node.cond);
+
+    // Step 4: Re-acquire the user's mutex before returning
+    MagMutex_Lock(m);
+}
+
+void MagCond_Signal(MagCond *cv) {
+    // Fast path: if no waiters exist, bail out immediately without taking the bucket lock.
+    // (This is completely safe due to the Acquire/Release relationship of the user's Mutex).
+    if (atomic_load_explicit(&cv->bits, memory_order_relaxed) == 0) {
+        return;
+    }
+
+    size_t hash    = hash_address(cv);
+    Bucket *bucket = &parking_lot[hash];
+    PLAT_MTX_LOCK(&bucket->mutex);
+
+    Waiter **curr   = &bucket->head;
+    Waiter *to_wake = nullptr;
+    bool more       = false;
+
+    // Extract the first waiter waiting on this specific CV address
+    while (*curr != nullptr) {
+        if ((*curr)->address == cv && to_wake == nullptr) {
+            to_wake = *curr;
+            *curr   = to_wake->next;
+            continue;
+        }
+        if ((*curr)->address == cv) {
+            more = true;
+        }
+        curr = &((*curr)->next);
+    }
+
+    if (!more) {
+        atomic_store_explicit(&cv->bits, 0, memory_order_relaxed);
+    }
+
+    if (to_wake != nullptr) {
+        atomic_store_explicit(&to_wake->signaled, true, memory_order_release);
+        PLAT_CND_SIGNAL(&to_wake->cond);
+    }
+    PLAT_MTX_UNLOCK(&bucket->mutex);
+}
+
+void MagCond_Broadcast(MagCond *cv) {
+    if (atomic_load_explicit(&cv->bits, memory_order_relaxed) == 0) {
+        return;
+    }
+
+    size_t hash    = hash_address(cv);
+    Bucket *bucket = &parking_lot[hash];
+    PLAT_MTX_LOCK(&bucket->mutex);
+
+    Waiter **curr   = &bucket->head;
+    Waiter *wake_list = nullptr;
+
+    while (*curr != nullptr) {
+        if ((*curr)->address == cv) {
+            Waiter *w = *curr;
+            *curr = w->next; // Unlink from bucket
+            
+            w->next = wake_list; // Link to local stack wake_list
+            wake_list = w;
+        } else {
+            curr = &((*curr)->next);
+        }
+    }
+
+    atomic_store_explicit(&cv->bits, 0, memory_order_relaxed);
+
+    // Wake all extracted nodes
+    while (wake_list != nullptr) {
+        Waiter *w = wake_list;
+        wake_list = w->next;
+
+        atomic_store_explicit(&w->signaled, true, memory_order_release);
+        PLAT_CND_SIGNAL(&w->cond);
     }
     PLAT_MTX_UNLOCK(&bucket->mutex);
 }

@@ -207,3 +207,39 @@ static inline void MagMutex_Unlock(MagMutex *m) {
     }
     MagMutex_UnlockSlow(m);
 }
+
+// --- MagCond (Condition Variable) ---
+
+/**
+ * @struct MagCond
+ * @brief A 1-Byte Condition Variable.
+ * 
+ * Works seamlessly with MagMutex. Uses the same parking lot backend to 
+ * provide ultra-low memory footprint synchronization.
+ */
+typedef struct MagCond {
+    _Atomic uint8_t bits;
+} MagCond;
+
+/**
+ * @brief Initializes a MagCond.
+ */
+static inline void MagCond_Init(MagCond *cv) {
+    atomic_init(&cv->bits, 0);
+}
+
+/**
+ * @brief Atomically releases the mutex and causes the calling thread to block on the condition variable.
+ * Upon successful return, the mutex shall have been locked and is owned by the calling thread.
+ */
+void MagCond_Wait(MagCond *cv, MagMutex *m);
+
+/**
+ * @brief Unblocks at least one of the threads that are blocked on the specified condition variable.
+ */
+void MagCond_Signal(MagCond *cv);
+
+/**
+ * @brief Unblocks all threads currently blocked on the specified condition variable.
+ */
+void MagCond_Broadcast(MagCond *cv);
