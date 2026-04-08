@@ -40,8 +40,8 @@ typedef struct {
 } MultiArg;
 
 static void *multi_mag_worker(void *arg) {
-    MultiArg *a   = (MultiArg *)arg;
-    int my_index  = atomic_fetch_add_explicit(&a->ready_count, 1, memory_order_acq_rel);
+    MultiArg *a  = (MultiArg *)arg;
+    int my_index = atomic_fetch_add_explicit(&a->ready_count, 1, memory_order_acq_rel);
 
     // Spin until every thread is ready.
     while (atomic_load_explicit(&a->ready_count, memory_order_acquire) < a->total_threads)
@@ -96,7 +96,8 @@ static void *multi_py_worker(void *arg) {
 static uint64_t max_elapsed(const uint64_t *elapsed_ns, int n) {
     uint64_t m = 0;
     for (int i = 0; i < n; i++)
-        if (elapsed_ns[i] > m) m = elapsed_ns[i];
+        if (elapsed_ns[i] > m)
+            m = elapsed_ns[i];
     return m;
 }
 
@@ -172,12 +173,12 @@ static void profile_multi_thread(int threads) {
         MagMutex mag            = {.bits = MAG_UNLOCKED};
         _Atomic long long count = 0;
         MultiArg arg            = {
-            .mag          = &mag,
-            .iters        = MULTI_ITERATIONS,
-            .counter      = &count,
-            .ready_count  = 0,
+            .mag           = &mag,
+            .iters         = MULTI_ITERATIONS,
+            .counter       = &count,
+            .ready_count   = 0,
             .total_threads = threads,
-            .elapsed_ns   = elapsed,
+            .elapsed_ns    = elapsed,
         };
         for (int i = 0; i < threads; i++)
             pthread_create(&pts[i], nullptr, multi_mag_worker, &arg);
@@ -193,12 +194,12 @@ static void profile_multi_thread(int threads) {
         pthread_mutex_init(&pth, nullptr);
         _Atomic long long count = 0;
         MultiArg arg            = {
-            .pth          = &pth,
-            .iters        = MULTI_ITERATIONS,
-            .counter      = &count,
-            .ready_count  = 0,
+            .pth           = &pth,
+            .iters         = MULTI_ITERATIONS,
+            .counter       = &count,
+            .ready_count   = 0,
             .total_threads = threads,
-            .elapsed_ns   = elapsed,
+            .elapsed_ns    = elapsed,
         };
         for (int i = 0; i < threads; i++)
             pthread_create(&pts[i], nullptr, multi_pth_worker, &arg);
@@ -214,12 +215,12 @@ static void profile_multi_thread(int threads) {
         PyMutex py              = {0};
         _Atomic long long count = 0;
         MultiArg arg            = {
-            .py           = &py,
-            .iters        = MULTI_ITERATIONS,
-            .counter      = &count,
-            .ready_count  = 0,
+            .py            = &py,
+            .iters         = MULTI_ITERATIONS,
+            .counter       = &count,
+            .ready_count   = 0,
             .total_threads = threads,
-            .elapsed_ns   = elapsed,
+            .elapsed_ns    = elapsed,
         };
         for (int i = 0; i < threads; i++)
             pthread_create(&pts[i], nullptr, multi_py_worker, &arg);
