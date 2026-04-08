@@ -85,15 +85,14 @@ typedef pthread_t plat_thread_id_t;
 // --- Memory Ordering Configuration ---
 
 #if defined(MAG_FORCE_CASAL)
-    // Experimental: Use Full Barriers for both Lock and Unlock
-#   define MAG_LOCK_ORDER   memory_order_acq_rel
-#   define MAG_UNLOCK_ORDER memory_order_acq_rel
+// Experimental: Use Full Barriers for both Lock and Unlock
+#    define MAG_LOCK_ORDER memory_order_acq_rel
+#    define MAG_UNLOCK_ORDER memory_order_acq_rel
 #else
-    // Standard: Standard Acquire for Lock, Release for Unlock
-#   define MAG_LOCK_ORDER   memory_order_acquire
-#   define MAG_UNLOCK_ORDER memory_order_release
+// Standard: Standard Acquire for Lock, Release for Unlock
+#    define MAG_LOCK_ORDER memory_order_acquire
+#    define MAG_UNLOCK_ORDER memory_order_release
 #endif
-
 
 // --- MagMutex States ---
 
@@ -130,8 +129,10 @@ static inline void mag_debug_pre_unlock(MagMutex *m) { (void)m; }
 static inline void mag_debug_clear_owner(MagMutex *m) { (void)m; }
 #endif
 
-MAG_COLD void MagMutex_LockSlow(MagMutex *m);
-MAG_COLD void MagMutex_UnlockSlow(MagMutex *m);
+[[gnu::cold, gnu::noinline, gnu::visibility("hidden"), gnu::nonnull(1)]]
+void MagMutex_LockSlow(MagMutex *m);
+[[gnu::cold, gnu::noinline, gnu::visibility("hidden"), gnu::nonnull(1)]]
+void MagMutex_UnlockSlow(MagMutex *m);
 
 // --- Public API ---
 
@@ -159,19 +160,17 @@ static inline bool MagMutex_TryLock(MagMutex *m) {
 }
 
 /**
- * @brief Acquires the lock. 
- * On ARM64 with MAG_FORCE_CASAL, this emits 'casalb'. 
+ * @brief Acquires the lock.
+ * On ARM64 with MAG_FORCE_CASAL, this emits 'casalb'.
  * Otherwise, emits 'casab' (Acquire).
  */
 [[gnu::flatten, gnu::hot, gnu::always_inline, gnu::artificial, gnu::leaf, gnu::nonnull(1)]]
 static inline void MagMutex_Lock(MagMutex *m) {
     mag_debug_check_pre_lock(m);
     uint8_t expected = MAG_UNLOCKED;
-    
-    if (MAG_LIKELY(atomic_compare_exchange_strong_explicit(
-            &m->bits, &expected, MAG_LOCKED, 
-            MAG_LOCK_ORDER, 
-            memory_order_relaxed))) {
+
+    if (MAG_LIKELY(atomic_compare_exchange_strong_explicit(&m->bits, &expected, MAG_LOCKED,
+                                                           MAG_LOCK_ORDER, memory_order_relaxed))) {
         mag_debug_post_lock(m);
         return;
     }
@@ -189,11 +188,9 @@ static inline void MagMutex_Unlock(MagMutex *m) {
     mag_debug_clear_owner(m);
 
     uint8_t expected = MAG_LOCKED;
-    
+
     if (MAG_LIKELY(atomic_compare_exchange_strong_explicit(
-            &m->bits, &expected, MAG_UNLOCKED, 
-            MAG_UNLOCK_ORDER, 
-            memory_order_relaxed))) {
+            &m->bits, &expected, MAG_UNLOCKED, MAG_UNLOCK_ORDER, memory_order_relaxed))) {
         return;
     }
     MagMutex_UnlockSlow(m);

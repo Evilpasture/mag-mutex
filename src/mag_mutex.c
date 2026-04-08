@@ -184,7 +184,8 @@ static inline size_t hash_address(const MagMutex *addr) {
     return x % BUCKET_COUNT;
 }
 
-MAG_COLD void MagMutex_LockSlow(MagMutex *m) {
+[[gnu::cold, gnu::noinline, gnu::visibility("hidden"), gnu::nonnull(1)]]
+void MagMutex_LockSlow(MagMutex *m) {
     size_t hash    = hash_address(m);
     Bucket *bucket = &parking_lot[hash];
 
@@ -192,10 +193,10 @@ MAG_COLD void MagMutex_LockSlow(MagMutex *m) {
     // We increase the number of mag_cpu_relax() calls per iteration.
     // On ARM64/Apple Silicon, 'yield' is very cheap, so we need a significant count.
     int backoff_limit = 1;
-    
+
     for (int i = 0; i < MAX_SPIN_COUNT; i++) {
         uint8_t v = atomic_load_explicit(&m->bits, memory_order_relaxed);
-        
+
         // If the lock appears free, try to grab it.
         if (!(v & MAG_LOCKED)) {
             if (atomic_compare_exchange_weak_explicit(&m->bits, &v, v | MAG_LOCKED,
@@ -207,14 +208,15 @@ MAG_COLD void MagMutex_LockSlow(MagMutex *m) {
                 return;
             }
         }
-        
-        if (MAG_UNLIKELY(v & MAG_POISONED)) return;
+
+        if (MAG_UNLIKELY(v & MAG_POISONED))
+            return;
 
         // Perform the exponential backoff
         for (int j = 0; j < backoff_limit; j++) {
             mag_cpu_relax();
         }
-        
+
         // Cap the backoff to prevent excessive spinning if the lock is held long-term
         if (backoff_limit < 1024) {
             backoff_limit <<= 1;
@@ -254,7 +256,7 @@ MAG_COLD void MagMutex_LockSlow(MagMutex *m) {
         PLAT_MTX_LOCK(&bucket->mutex);
 
         // RE-CHECK LOCK STATE (The "Gatekeeper" Pattern)
-        // This prevents the lost-wakeup race where the lock is released 
+        // This prevents the lost-wakeup race where the lock is released
         // between the initial check and the PLAT_MTX_LOCK.
         v = atomic_load_explicit(&m->bits, memory_order_relaxed);
         if (MAG_UNLIKELY(!(v & MAG_LOCKED) || !(v & MAG_HAS_WAITERS))) {
@@ -275,13 +277,14 @@ MAG_COLD void MagMutex_LockSlow(MagMutex *m) {
         PLAT_MTX_UNLOCK(&bucket->mutex);
         PLAT_CND_DESTROY(&node.cond);
 
-        // Note: Because we use a "Decoupled Unlock" strategy (the unlocker clears 
+        // Note: Because we use a "Decoupled Unlock" strategy (the unlocker clears
         // MAG_LOCKED before waking us), we wake up in an UNLOCKED state.
         // We loop back to the start of Phase 2 to compete for the lock again.
     }
 }
 
-MAG_COLD void MagMutex_UnlockSlow(MagMutex *m) {
+[[gnu::cold, gnu::noinline, gnu::visibility("hidden"), gnu::nonnull(1)]]
+void MagMutex_UnlockSlow(MagMutex *m) {
     uint8_t v = atomic_load_explicit(&m->bits, memory_order_relaxed);
     for (;;) {
         uint8_t desired = v & ~MAG_LOCKED;
