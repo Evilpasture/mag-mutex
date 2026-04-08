@@ -29,9 +29,27 @@
  */
 
 #include <assert.h>
-#include <stdatomic.h>
-#include <stdbool.h>
+#ifdef __cplusplus
+#    include <atomic>
+// Map C11/C23 names to C++ names for the inline functions
+using std::memory_order_acq_rel;
+using std::memory_order_acquire;
+using std::memory_order_relaxed;
+using std::memory_order_release;
+#    define MAG_ATOMIC(T) std::atomic<T>
+#else
+#    include <stdatomic.h>
+#    define MAG_ATOMIC(T) _Atomic T
+#endif
 #include <stdint.h>
+
+#ifdef __cplusplus
+#    define MAG_ATOMIC_CX(obj, exp, des, succ, fail)                                               \
+        std::atomic_compare_exchange_strong_explicit(obj, exp, des, succ, fail)
+#else
+#    define MAG_ATOMIC_CX(obj, exp, des, succ, fail)                                               \
+        atomic_compare_exchange_strong_explicit(obj, exp, des, succ, fail)
+#endif
 
 #ifndef NDEBUG
 #    define MAG_DEBUG 1
@@ -106,12 +124,12 @@ constexpr uint8_t MAG_POISONED    = 0x04;
  * @brief The core mutex structure.
  */
 typedef struct MagMutex {
-    _Atomic uint8_t bits;
+    MAG_ATOMIC(uint8_t) bits;
 #ifdef MAG_DEBUG
-    _Atomic bool has_owner;
-    _Atomic plat_thread_id_t owner;
-    _Atomic uint64_t spin_success_count;
-    _Atomic uint64_t park_count;
+    MAG_ATOMIC(bool) has_owner;
+    MAG_ATOMIC(plat_thread_id_t) owner;
+    MAG_ATOMIC(uint64_t) spin_success_count;
+    MAG_ATOMIC(uint64_t) park_count;
 #endif
 } MagMutex;
 
@@ -163,8 +181,8 @@ static inline void MagMutex_Poison(MagMutex *m) {
 static inline bool MagMutex_TryLock(MagMutex *m) {
     mag_debug_check_pre_lock(m);
     uint8_t expected = MAG_UNLOCKED;
-    bool success     = atomic_compare_exchange_strong_explicit(
-        &m->bits, &expected, MAG_LOCKED, memory_order_acquire, memory_order_relaxed);
+    bool success =
+        MAG_ATOMIC_CX(&m->bits, &expected, MAG_LOCKED, memory_order_acquire, memory_order_relaxed);
     if (success) {
         mag_debug_post_lock(m);
     }
@@ -181,8 +199,8 @@ static inline void MagMutex_Lock(MagMutex *m) {
     mag_debug_check_pre_lock(m);
     uint8_t expected = MAG_UNLOCKED;
 
-    if (MAG_LIKELY(atomic_compare_exchange_strong_explicit(&m->bits, &expected, MAG_LOCKED,
-                                                           MAG_LOCK_ORDER, memory_order_relaxed))) {
+    if (MAG_LIKELY(
+            MAG_ATOMIC_CX(&m->bits, &expected, MAG_LOCKED, MAG_LOCK_ORDER, memory_order_relaxed))) {
         mag_debug_post_lock(m);
         return;
     }
@@ -201,8 +219,8 @@ static inline void MagMutex_Unlock(MagMutex *m) {
 
     uint8_t expected = MAG_LOCKED;
 
-    if (MAG_LIKELY(atomic_compare_exchange_strong_explicit(
-            &m->bits, &expected, MAG_UNLOCKED, MAG_UNLOCK_ORDER, memory_order_relaxed))) {
+    if (MAG_LIKELY(MAG_ATOMIC_CX(&m->bits, &expected, MAG_UNLOCKED, MAG_UNLOCK_ORDER,
+                                 memory_order_relaxed))) {
         return;
     }
     MagMutex_UnlockSlow(m);
@@ -213,24 +231,29 @@ static inline void MagMutex_Unlock(MagMutex *m) {
 /**
  * @struct MagCond
  * @brief A 1-Byte Condition Variable.
- * 
- * Works seamlessly with MagMutex. Uses the same parking lot backend to 
+ *
+ * Works seamlessly with MagMutex. Uses the same parking lot backend to
  * provide ultra-low memory footprint synchronization.
  */
 typedef struct MagCond {
-    _Atomic uint8_t bits;
+    MAG_ATOMIC(uint8_t) bits;
 } MagCond;
 
 /**
  * @brief Initializes a MagCond.
  */
 static inline void MagCond_Init(MagCond *cv) {
+#ifdef __cplusplus
+    cv->bits.store(0, std::memory_order_relaxed);
+#else
     atomic_init(&cv->bits, 0);
+#endif
 }
 
 /**
- * @brief Atomically releases the mutex and causes the calling thread to block on the condition variable.
- * Upon successful return, the mutex shall have been locked and is owned by the calling thread.
+ * @brief Atomically releases the mutex and causes the calling thread to block on the condition
+ * variable. Upon successful return, the mutex shall have been locked and is owned by the calling
+ * thread.
  */
 void MagCond_Wait(MagCond *cv, MagMutex *m);
 

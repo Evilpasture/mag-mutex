@@ -135,9 +135,9 @@ void mag_debug_pre_unlock(MagMutex *m) {
 
 typedef struct Waiter Waiter;
 struct Waiter {
-    const void *address; 
+    const void *address;
     plat_cnd_t cond;
-    _Atomic bool signaled;
+    MAG_ATOMIC(bool) signaled;
     Waiter *next;
 };
 
