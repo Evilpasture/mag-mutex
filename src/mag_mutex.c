@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <time.h>
 
-static constexpr int MAX_SPIN_COUNT = 100;
+static constexpr int MAX_SPIN_COUNT = 40;
 
 // Address sharding for the parking lot to eliminate false-sharing lock
 // contention. 256 buckets padded to Apple Silicon / Modern x86 strict
@@ -188,9 +188,16 @@ MAG_COLD void MagMutex_LockSlow(MagMutex *m) {
     size_t hash    = hash_address(m);
     Bucket *bucket = &parking_lot[hash];
 
-    for (int spin = 0; spin < MAX_SPIN_COUNT; spin++) {
+    // --- PHASE 1: Adaptive Exponential Backoff Spin ---
+    // We increase the number of mag_cpu_relax() calls per iteration.
+    // On ARM64/Apple Silicon, 'yield' is very cheap, so we need a significant count.
+    int backoff_limit = 1;
+    
+    for (int i = 0; i < MAX_SPIN_COUNT; i++) {
         uint8_t v = atomic_load_explicit(&m->bits, memory_order_relaxed);
-        if (!(v & MAG_LOCKED) && !(v & MAG_POISONED)) {
+        
+        // If the lock appears free, try to grab it.
+        if (!(v & MAG_LOCKED)) {
             if (atomic_compare_exchange_weak_explicit(&m->bits, &v, v | MAG_LOCKED,
                                                       memory_order_acquire, memory_order_relaxed)) {
                 mag_debug_post_lock(m);
@@ -200,11 +207,25 @@ MAG_COLD void MagMutex_LockSlow(MagMutex *m) {
                 return;
             }
         }
-        mag_cpu_relax();
+        
+        if (MAG_UNLIKELY(v & MAG_POISONED)) return;
+
+        // Perform the exponential backoff
+        for (int j = 0; j < backoff_limit; j++) {
+            mag_cpu_relax();
+        }
+        
+        // Cap the backoff to prevent excessive spinning if the lock is held long-term
+        if (backoff_limit < 1024) {
+            backoff_limit <<= 1;
+        }
     }
 
+    // --- PHASE 2: Parking ---
     for (;;) {
         uint8_t v = atomic_load_explicit(&m->bits, memory_order_relaxed);
+
+        // Final attempt to snatch the lock (Lock Stealing)
         if (!(v & MAG_LOCKED)) {
             if (atomic_compare_exchange_weak_explicit(&m->bits, &v, v | MAG_LOCKED,
                                                       memory_order_acquire, memory_order_relaxed)) {
@@ -213,6 +234,8 @@ MAG_COLD void MagMutex_LockSlow(MagMutex *m) {
             }
             continue;
         }
+
+        // Ensure the MAG_HAS_WAITERS bit is set before we actually sleep.
         if (!(v & MAG_HAS_WAITERS)) {
             if (!atomic_compare_exchange_weak_explicit(&m->bits, &v, v | MAG_HAS_WAITERS,
                                                        memory_order_relaxed, memory_order_relaxed))
@@ -222,31 +245,39 @@ MAG_COLD void MagMutex_LockSlow(MagMutex *m) {
 #ifdef MAG_DEBUG
         atomic_fetch_add_explicit(&m->park_count, 1, memory_order_relaxed);
 #endif
+
         Waiter node = {.address = m, .next = nullptr};
         atomic_init(&node.signaled, false);
         PLAT_CND_INIT(&node.cond);
+
+        // Acquire the bucket mutex to protect the parking lot list
         PLAT_MTX_LOCK(&bucket->mutex);
 
+        // RE-CHECK LOCK STATE (The "Gatekeeper" Pattern)
+        // This prevents the lost-wakeup race where the lock is released 
+        // between the initial check and the PLAT_MTX_LOCK.
         v = atomic_load_explicit(&m->bits, memory_order_relaxed);
-        // Define the "Required State" for parking:
-        // Must be LOCKED and have WAITERS bit set, and NOT poisoned.
-        constexpr uint8_t PARK_MASK = MAG_LOCKED | MAG_HAS_WAITERS | MAG_POISONED;
-        constexpr uint8_t PARK_EXPECTED = MAG_LOCKED | MAG_HAS_WAITERS;
-        // Single branch: If the state is anything other than (LOCKED | WAITERS), bail.
-        if (MAG_LIKELY((v & PARK_MASK) != PARK_EXPECTED)) {
+        if (MAG_UNLIKELY(!(v & MAG_LOCKED) || !(v & MAG_HAS_WAITERS))) {
             PLAT_MTX_UNLOCK(&bucket->mutex);
             PLAT_CND_DESTROY(&node.cond);
-            continue;
+            continue; // Go back and try to grab the lock in userspace
         }
 
+        // Enqueue our waiter node
         node.next    = bucket->head;
         bucket->head = &node;
-        while (!atomic_load_explicit(&node.signaled, memory_order_acquire))
+
+        // Standard condition variable wait loop to handle spurious wakeups
+        while (!atomic_load_explicit(&node.signaled, memory_order_acquire)) {
             PLAT_CND_WAIT(&node.cond, &bucket->mutex);
+        }
 
         PLAT_MTX_UNLOCK(&bucket->mutex);
         PLAT_CND_DESTROY(&node.cond);
-        // Note: Decoupled unlock means we wake up unlocked. We loop to try and re-acquire.
+
+        // Note: Because we use a "Decoupled Unlock" strategy (the unlocker clears 
+        // MAG_LOCKED before waking us), we wake up in an UNLOCKED state.
+        // We loop back to the start of Phase 2 to compete for the lock again.
     }
 }
 
