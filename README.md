@@ -17,6 +17,19 @@ MagMutex is a "Parking Lot" style synchronization primitive designed for high-co
   <br>
   <em>Figure 2: Latency Distribution at 16 Threads. Note the tight variance of MagMutex compared to PyMutex.</em>
 </p>
+
+<p align="center">
+  <img src="fairness.png" width="800px" alt="Scaling Plot">
+  <br>
+  <em>Figure 3: Work Distribution Fairness up to 16 threads. MagCond is as fair as pthread_cond.</em>
+</p>
+
+<p align="center">
+  <img src="throughput.png" width="800px" alt="Distribution Plot">
+  <br>
+  <em>Figure 4: Conditional Variable Throughput from 1 to 16 threads. MagCond stays rock bottom while pthread_cond is chaotic and unpredictable with high contention.</em>
+</p>
+
 ## Key Features
 
 - **Minimal Footprint:** Exactly 8 bits per mutex (Release mode). Ideal for protecting millions of small objects.
