@@ -39,12 +39,16 @@
 
 #if defined(__GNUC__) || defined(__clang__)
 #    define MAG_LIKELY(x) __builtin_expect(!!(x), 1)
+#    define MAG_UNLIKELY(x) __builtin_expect(!!(x), 0)
 #    define MAG_COLD __attribute__((cold))
 #    define MAG_ALWAYS_INLINE __attribute__((always_inline))
+#    define MAG_ASSUME(x) __builtin_assume(x)
 #else
 #    define MAG_LIKELY(x) (x)
+#    define MAG_UNLIKELY(x) (x)
 #    define MAG_COLD
 #    define MAG_ALWAYS_INLINE
+#    define MAG_ASSUME(x) (x)
 #endif
 
 #if defined(_WIN32)
