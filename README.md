@@ -7,7 +7,7 @@ MagMutex is a "Parking Lot" style synchronization primitive designed for high-co
 ## Performance Profile
 
 ### Mutex Contention Scaling
-![Scaling Plot](scaling_plot.jpg)
+![Scaling Plot](scaling_plot.png)
 
 ### Latency Distribution (16 Threads)
 ![Distribution Plot](distribution_plot.png)
