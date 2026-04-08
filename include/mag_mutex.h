@@ -146,16 +146,19 @@ static inline bool MagMutex_TryLock(MagMutex *m) {
 }
 
 /**
- * @brief Acquires the lock. Blocks if the lock is held by another thread.
- * Uses an adaptive spin-then-park strategy.
+ * @brief Acquires the lock with Full Barrier (CASAL) semantics.
  */
 [[gnu::flatten]] [[gnu::hot]] [[gnu::always_inline]] [[gnu::artificial]] [[gnu::leaf]]
 static inline void MagMutex_Lock(MagMutex *m) {
     mag_debug_check_pre_lock(m);
     uint8_t expected = MAG_UNLOCKED;
-    // Fast-path: Uncontended Acquire
+    
+    // Changing memory_order_acquire to memory_order_acq_rel triggers CASAL.
+    // This acts as a full hardware fence: nothing can move above or below this line.
     if (MAG_LIKELY(atomic_compare_exchange_strong_explicit(
-            &m->bits, &expected, MAG_LOCKED, memory_order_acquire, memory_order_relaxed))) {
+            &m->bits, &expected, MAG_LOCKED, 
+            memory_order_acq_rel,   // <--- Success: Acquire + Release
+            memory_order_relaxed))) {
         mag_debug_post_lock(m);
         return;
     }
@@ -163,7 +166,7 @@ static inline void MagMutex_Lock(MagMutex *m) {
 }
 
 /**
- * @brief Releases the lock. Wakes one waiting thread if necessary.
+ * @brief Releases the lock with Full Barrier (CASAL) semantics.
  */
 [[gnu::flatten]] [[gnu::hot]] [[gnu::always_inline]] [[gnu::artificial]] [[gnu::leaf]]
 static inline void MagMutex_Unlock(MagMutex *m) {
@@ -171,9 +174,12 @@ static inline void MagMutex_Unlock(MagMutex *m) {
     mag_debug_clear_owner(m);
 
     uint8_t expected = MAG_LOCKED;
-    // Fast-path: Uncontended Release
+    
+    // Changing memory_order_release to memory_order_acq_rel triggers CASAL.
     if (MAG_LIKELY(atomic_compare_exchange_strong_explicit(
-            &m->bits, &expected, MAG_UNLOCKED, memory_order_release, memory_order_relaxed))) {
+            &m->bits, &expected, MAG_UNLOCKED, 
+            memory_order_acq_rel,   // <--- Success: Acquire + Release
+            memory_order_relaxed))) {
         return;
     }
     MagMutex_UnlockSlow(m);
