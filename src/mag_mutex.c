@@ -19,18 +19,6 @@ static constexpr size_t BUCKET_COUNT = 256;
 #    endif
 #endif
 
-// Pure CPU pause. Removed sched_yield which causes severe OS stalls under high
-// contention.
-static inline void mag_cpu_relax() {
-#if defined(__aarch64__)
-    __asm__ __volatile__("yield" ::: "memory");
-#elif defined(__x86_64__) || defined(_M_X64)
-    __builtin_ia32_pause();
-#elif defined(_WIN32)
-    YieldProcessor();
-#endif
-}
-
 static_assert(ATOMIC_INT_LOCK_FREE == 2, "MagMutex requires always-lock-free atomics!");
 static_assert(ATOMIC_POINTER_LOCK_FREE == 2, "MagMutex parking lot requires lock-free pointers!");
 
@@ -190,7 +178,7 @@ void MagMutex_LockSlow(MagMutex *m) {
     Bucket *bucket = &parking_lot[hash];
 
     // --- PHASE 1: Adaptive Exponential Backoff Spin ---
-    // We increase the number of mag_cpu_relax() calls per iteration.
+    // We increase the number of Mag_CPURelax() calls per iteration.
     // On ARM64/Apple Silicon, 'yield' is very cheap, so we need a significant count.
     int backoff_limit = 1;
 
@@ -214,7 +202,7 @@ void MagMutex_LockSlow(MagMutex *m) {
 
         // Perform the exponential backoff
         for (int j = 0; j < backoff_limit; j++) {
-            mag_cpu_relax();
+            Mag_CPURelax();
         }
 
         // Cap the backoff to prevent excessive spinning if the lock is held long-term

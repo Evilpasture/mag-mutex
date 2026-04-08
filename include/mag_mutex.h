@@ -136,6 +136,18 @@ void MagMutex_UnlockSlow(MagMutex *m);
 
 // --- Public API ---
 
+// Pure CPU pause. Removed sched_yield which causes severe OS stalls under high
+// contention.
+static inline void Mag_CPURelax() {
+#if defined(__aarch64__)
+    __asm__ __volatile__("yield" ::: "memory");
+#elif defined(__x86_64__) || defined(_M_X64)
+    __builtin_ia32_pause();
+#elif defined(_WIN32)
+    YieldProcessor();
+#endif
+}
+
 /**
  * @brief Permanently poisons the mutex. Any subsequent lock attempt will abort.
  */
