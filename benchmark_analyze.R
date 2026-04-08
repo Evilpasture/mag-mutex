@@ -16,7 +16,7 @@ get_path <- function() {
   file_arg <- grep("--file=", args, value = TRUE)
   if (length(file_arg) > 0) return(dirname(normalizePath(sub("--file=", "", file_arg))))
   return(getwd())
-}
+} 
 
 setwd(get_path())
 
