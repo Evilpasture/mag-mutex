@@ -82,6 +82,19 @@ typedef pthread_t plat_thread_id_t;
 #    define PLAT_THREADS_EQUAL(t1, t2) pthread_equal((t1), (t2))
 #endif
 
+// --- Memory Ordering Configuration ---
+
+#if defined(MAG_FORCE_CASAL)
+    // Experimental: Use Full Barriers for both Lock and Unlock
+#   define MAG_LOCK_ORDER   memory_order_acq_rel
+#   define MAG_UNLOCK_ORDER memory_order_acq_rel
+#else
+    // Standard: Standard Acquire for Lock, Release for Unlock
+#   define MAG_LOCK_ORDER   memory_order_acquire
+#   define MAG_UNLOCK_ORDER memory_order_release
+#endif
+
+
 // --- MagMutex States ---
 
 constexpr uint8_t MAG_UNLOCKED    = 0x00;
@@ -146,18 +159,18 @@ static inline bool MagMutex_TryLock(MagMutex *m) {
 }
 
 /**
- * @brief Acquires the lock with Full Barrier (CASAL) semantics.
+ * @brief Acquires the lock. 
+ * On ARM64 with MAG_FORCE_CASAL, this emits 'casalb'. 
+ * Otherwise, emits 'casab' (Acquire).
  */
-[[gnu::flatten]] [[gnu::hot]] [[gnu::always_inline]] [[gnu::artificial]] [[gnu::leaf]]
+[[gnu::flatten, gnu::hot, gnu::always_inline, gnu::artificial, gnu::leaf, gnu::nonnull(1)]]
 static inline void MagMutex_Lock(MagMutex *m) {
     mag_debug_check_pre_lock(m);
     uint8_t expected = MAG_UNLOCKED;
     
-    // Changing memory_order_acquire to memory_order_acq_rel triggers CASAL.
-    // This acts as a full hardware fence: nothing can move above or below this line.
     if (MAG_LIKELY(atomic_compare_exchange_strong_explicit(
             &m->bits, &expected, MAG_LOCKED, 
-            memory_order_acq_rel,   // <--- Success: Acquire + Release
+            MAG_LOCK_ORDER, 
             memory_order_relaxed))) {
         mag_debug_post_lock(m);
         return;
@@ -166,19 +179,20 @@ static inline void MagMutex_Lock(MagMutex *m) {
 }
 
 /**
- * @brief Releases the lock with Full Barrier (CASAL) semantics.
+ * @brief Releases the lock.
+ * On ARM64 with MAG_FORCE_CASAL, this emits 'casalb'.
+ * Otherwise, emits 'caslb' (Release).
  */
-[[gnu::flatten]] [[gnu::hot]] [[gnu::always_inline]] [[gnu::artificial]] [[gnu::leaf]]
+[[gnu::flatten, gnu::hot, gnu::always_inline, gnu::artificial, gnu::leaf, gnu::nonnull(1)]]
 static inline void MagMutex_Unlock(MagMutex *m) {
     mag_debug_pre_unlock(m);
     mag_debug_clear_owner(m);
 
     uint8_t expected = MAG_LOCKED;
     
-    // Changing memory_order_release to memory_order_acq_rel triggers CASAL.
     if (MAG_LIKELY(atomic_compare_exchange_strong_explicit(
             &m->bits, &expected, MAG_UNLOCKED, 
-            memory_order_acq_rel,   // <--- Success: Acquire + Release
+            MAG_UNLOCK_ORDER, 
             memory_order_relaxed))) {
         return;
     }
