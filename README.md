@@ -6,15 +6,11 @@ MagMutex is a "Parking Lot" style synchronization primitive designed for high-co
 
 ## Performance Profile
 
-Benchmarks conducted on high-contention loops (Lock → Increment → Unlock).
+### Mutex Contention Scaling
+![Scaling Plot](scaling_plot.jpg)
 
-| Contention Level | MagMutex | pthread_mutex | PyMutex (3.14) |
-| :--- | :--- | :--- | :--- |
-| **Single Thread** | **1.78 ns** | 3.98 ns | 1.78 ns |
-| **2 Threads** | **3.31 ns** | 70.39 ns | 4.88 ns |
-| **8 Threads** | **8.73 ns** | 18.16 ns | 14.43 ns |
-
-*Hardware: Benchmarked on modern ARM64 silicon of an M4 MacBook.*
+### Latency Distribution (16 Threads)
+![Distribution Plot](distribution_plot.png)
 
 ## Key Features
 
@@ -33,9 +29,18 @@ cmake -DCMAKE_BUILD_TYPE=Release -DENABLE_TSAN=OFF ..
 cmake --build .
 ```
 
+## Test(Optional)
+```zsh
+# Assuming you're in build/ directory after finishing build.
+./MagMutex > ../benchmark_results.csv
+# Then visualize the data.
+RScript ../benchmark.r
+# Two images should appear in your root.
+```
+
 Just be aware that you can't build this with MSVC(cl.exe).
 
-Not a chance.
+Not a chance. Install LLVM.
 
 ## How to use
 
@@ -70,9 +75,6 @@ When a thread cannot acquire a lock, it hashes the mutex's memory address to one
 1. A platform-native mutex to protect the waiter list.
 2. A linked list of `Waiter` nodes.
 3. **128-byte padding** to ensure no two buckets share a cache line.
-
-### Slot Predication
-The slow-path acquisition uses predicated bit-masking to validate the lock state in a single CPU branch, maximizing instruction-level parallelism (ILP) during high contention.
 
 ## Debug Mode (`MAG_DEBUG`)
 
