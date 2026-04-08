@@ -39,7 +39,7 @@ cmake --build .
 # Assuming you're in build/ directory after finishing build.
 ./MagMutex > ../benchmark_results.csv
 # Then visualize the data.
-RScript ../benchmark.r
+RScript ../benchmark_analyze.R
 # Two images should appear in your root.
 ```
 
