@@ -177,7 +177,7 @@ static inline void MagMutex_Poison(MagMutex *m) {
  * @brief Attempts to acquire the lock without blocking.
  * @return true if acquired, false if contended.
  */
-[[gnu::flatten]] [[gnu::hot]] [[gnu::always_inline]] [[gnu::artificial]] [[gnu::leaf]]
+[[gnu::flatten]] [[gnu::hot]] [[gnu::always_inline]] [[gnu::artificial]]
 static inline bool MagMutex_TryLock(MagMutex *m) {
     mag_debug_check_pre_lock(m);
     uint8_t expected = MAG_UNLOCKED;
@@ -194,7 +194,7 @@ static inline bool MagMutex_TryLock(MagMutex *m) {
  * On ARM64 with MAG_FORCE_CASAL, this emits 'casalb'.
  * Otherwise, emits 'casab' (Acquire).
  */
-[[gnu::flatten, gnu::hot, gnu::always_inline, gnu::artificial, gnu::leaf, gnu::nonnull(1)]]
+[[gnu::flatten, gnu::hot, gnu::always_inline, gnu::artificial, gnu::nonnull(1)]]
 static inline void MagMutex_Lock(MagMutex *m) {
     mag_debug_check_pre_lock(m);
     uint8_t expected = MAG_UNLOCKED;
@@ -212,7 +212,7 @@ static inline void MagMutex_Lock(MagMutex *m) {
  * On ARM64 with MAG_FORCE_CASAL, this emits 'casalb'.
  * Otherwise, emits 'caslb' (Release).
  */
-[[gnu::flatten, gnu::hot, gnu::always_inline, gnu::artificial, gnu::leaf, gnu::nonnull(1)]]
+[[gnu::flatten, gnu::hot, gnu::always_inline, gnu::artificial, gnu::nonnull(1)]]
 static inline void MagMutex_Unlock(MagMutex *m) {
     mag_debug_pre_unlock(m);
     mag_debug_clear_owner(m);
