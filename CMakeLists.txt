@@ -16,7 +16,7 @@ function(enforce_modern_compiler)
             "\n ################################################################\n"
             "  GENERATOR ERROR - HALTED: Visual Studio / MSBuild detected.\n"
             " ################################################################\n"
-            "  Culverin's build system is incompatible with the \n"
+            "  MagMutex's build system is incompatible with the \n"
             "  Visual Studio project system's rigid toolchain handling.\n"
             "  - The reason being: The MSBuild generator will default to cl.exe, \n"
             "  which is currently forbidden from compiling this project. \n"
@@ -32,7 +32,7 @@ function(enforce_modern_compiler)
     endif()
     if(CMAKE_C_COMPILER_ID AND NOT CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
         message(STATUS "Detected Compiler ID: ${CMAKE_C_COMPILER_ID}")
-        message(STATUS "Culverin: MSVC detected. Searching for alternatives...")
+        message(STATUS "MagMutex: MSVC detected. Searching for alternatives...")
 
         find_program(CLANG_PATH NAMES clang clang-cl)
         find_program(GCC_PATH NAMES gcc)
@@ -120,23 +120,32 @@ target_link_libraries(MagMutex PRIVATE mag_mutex_lib Threads::Threads)
 # ==============================================================================
 
 if(CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
-    # Strictness
+    # Universal flags
     target_compile_options(mag_mutex_lib PRIVATE 
         -Wall -Wextra -Wpedantic -Wshadow -Wcast-align 
         -Wstrict-prototypes -Wmissing-prototypes -Wimplicit-fallthrough
-        -Watomic-implicit-seq-cst -Wthread-safety -Werror=atomic-implicit-seq-cst
     )
 
+    # Clang-Specific Diagnostics
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang")
+        target_compile_options(mag_mutex_lib PRIVATE 
+            -Watomic-implicit-seq-cst 
+            -Wthread-safety 
+            -Werror=atomic-implicit-seq-cst
+        )
+    endif()
+
     # Performance
-    set(LTO_FLAG "-flto=thin")
     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
         set(LTO_FLAG "-flto=auto")
+    else()
+        set(LTO_FLAG "-flto=thin")
     endif()
 
     target_compile_options(mag_mutex_lib PRIVATE -O3 ${LTO_FLAG} -fomit-frame-pointer -fno-stack-protector)
-    target_link_options(MagMutex PRIVATE ${LTO_FLAG})
+    target_link_options(mag_mutex_lib PRIVATE ${LTO_FLAG})
 
-    # CPU-Specific (ARM vs x86)
+    # CPU-Specific
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
         target_compile_options(mag_mutex_lib PRIVATE -march=native)
     else()
