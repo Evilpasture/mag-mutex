@@ -54,11 +54,3 @@ CheckOptions:
   # 3. Concurrency Checks
   - key:             concurrency-mt-unsafe.FunctionSet
     value:           posix # Check for thread-unsafe functions like strtok, getenv, etc.
-
-# Enable detailed analysis for the parking lot logic
-ClangTidyConfigs:
-  clang-analyzer-core.DivideZero: true
-  clang-analyzer-core.NullDereference: true
-  clang-analyzer-core.UndefinedBinaryOpResult: true
-  clang-analyzer-unix.Malloc: true
-  clang-analyzer-valist.Uninitialized: true
