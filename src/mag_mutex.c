@@ -72,21 +72,21 @@ static void add_lock_edge(const MagMutex *from, const MagMutex *to) {
     PLAT_MTX_UNLOCK(&debug_graph_mutex);
 }
 
-void mag_debug_clear_owner(MagMutex *m) {
-    atomic_store_explicit(&m->has_owner, false, memory_order_release);
+void mag_debug_clear_owner(MagMutex *mod) {
+    atomic_store_explicit(&mod->has_owner, false, memory_order_release);
 }
 
-void mag_debug_check_pre_lock(MagMutex *m) {
-    uint8_t bits = atomic_load_explicit(&m->bits, memory_order_relaxed);
+void mag_debug_check_pre_lock(MagMutex *mod) {
+    uint8_t bits = atomic_load_explicit(&mod->bits, memory_order_relaxed);
     if (bits & MAG_POISONED) {
         assert(false && "FATAL: Attempting to lock a POISONED mutex!");
         abort();
     }
 
     if (bits & MAG_LOCKED) {
-        if (atomic_load_explicit(&m->has_owner, memory_order_acquire)) {
+        if (atomic_load_explicit(&mod->has_owner, memory_order_acquire)) {
             plat_thread_id_t current = PLAT_CURRENT_THREAD();
-            plat_thread_id_t owner   = atomic_load_explicit(&m->owner, memory_order_relaxed);
+            plat_thread_id_t owner   = atomic_load_explicit(&mod->owner, memory_order_relaxed);
             if (PLAT_THREADS_EQUAL(owner, current)) {
                 assert(false && "DEADLOCK DETECTED: Recursive locking!");
                 abort();
@@ -95,26 +95,26 @@ void mag_debug_check_pre_lock(MagMutex *m) {
     }
 }
 
-void mag_debug_post_lock(MagMutex *m) {
-    atomic_store_explicit(&m->owner, PLAT_CURRENT_THREAD(), memory_order_relaxed);
-    atomic_store_explicit(&m->has_owner, true, memory_order_release);
+void mag_debug_post_lock(MagMutex *mod) {
+    atomic_store_explicit(&mod->owner, PLAT_CURRENT_THREAD(), memory_order_relaxed);
+    atomic_store_explicit(&mod->has_owner, true, memory_order_release);
 
     for (int i = 0; i < held_locks_count; i++) {
-        add_lock_edge(held_locks[i], m);
+        add_lock_edge(held_locks[i], mod);
     }
     if (held_locks_count < MAX_HELD_LOCKS) {
-        held_locks[held_locks_count++] = m;
+        held_locks[held_locks_count++] = mod;
     }
 }
 
-void mag_debug_pre_unlock(MagMutex *m) {
-    if (!atomic_load_explicit(&m->has_owner, memory_order_acquire)) {
+void mag_debug_pre_unlock(MagMutex *mod) {
+    if (!atomic_load_explicit(&mod->has_owner, memory_order_acquire)) {
         assert(false && "FATAL: Unlocking a mutex that has no owner!");
         abort();
     }
 
     plat_thread_id_t current = PLAT_CURRENT_THREAD();
-    plat_thread_id_t owner   = atomic_load_explicit(&m->owner, memory_order_relaxed);
+    plat_thread_id_t owner   = atomic_load_explicit(&mod->owner, memory_order_relaxed);
 
     if (!PLAT_THREADS_EQUAL(owner, current)) {
         assert(false && "FATAL: Unlocking a mutex owned by another thread!");
@@ -122,7 +122,7 @@ void mag_debug_pre_unlock(MagMutex *m) {
     }
 
     for (int i = held_locks_count - 1; i >= 0; i--) {
-        if (held_locks[i] == m) {
+        if (held_locks[i] == mod) {
             for (int j = i; j < held_locks_count - 1; j++) {
                 held_locks[j] = held_locks[j + 1];
             }
@@ -173,8 +173,8 @@ static inline size_t hash_address(const void *addr) {
 }
 
 [[gnu::cold, gnu::noinline, gnu::visibility("hidden"), gnu::nonnull(1)]]
-void MagMutex_LockSlow(MagMutex *m) {
-    size_t hash    = hash_address(m);
+void MagMutex_LockSlow(MagMutex *mod) {
+    size_t hash    = hash_address(mod);
     Bucket *bucket = &parking_lot[hash];
 
     // --- PHASE 1: Adaptive Exponential Backoff Spin ---
@@ -183,15 +183,15 @@ void MagMutex_LockSlow(MagMutex *m) {
     int backoff_limit = 1;
 
     for (int i = 0; i < MAX_SPIN_COUNT; i++) {
-        uint8_t v = atomic_load_explicit(&m->bits, memory_order_relaxed);
+        uint8_t v = atomic_load_explicit(&mod->bits, memory_order_relaxed);
 
         // If the lock appears free, try to grab it.
         if (!(v & MAG_LOCKED)) {
-            if (atomic_compare_exchange_weak_explicit(&m->bits, &v, v | MAG_LOCKED,
+            if (atomic_compare_exchange_weak_explicit(&mod->bits, &v, v | MAG_LOCKED,
                                                       memory_order_acquire, memory_order_relaxed)) {
-                mag_debug_post_lock(m);
+                mag_debug_post_lock(mod);
 #ifdef MAG_DEBUG
-                atomic_fetch_add_explicit(&m->spin_success_count, 1, memory_order_relaxed);
+                atomic_fetch_add_explicit(&mod->spin_success_count, 1, memory_order_relaxed);
 #endif
                 return;
             }
@@ -213,13 +213,13 @@ void MagMutex_LockSlow(MagMutex *m) {
 
     // --- PHASE 2: Parking ---
     for (;;) {
-        uint8_t v = atomic_load_explicit(&m->bits, memory_order_relaxed);
+        uint8_t v = atomic_load_explicit(&mod->bits, memory_order_relaxed);
 
         // Final attempt to snatch the lock (Lock Stealing)
         if (!(v & MAG_LOCKED)) {
-            if (atomic_compare_exchange_weak_explicit(&m->bits, &v, v | MAG_LOCKED,
+            if (atomic_compare_exchange_weak_explicit(&mod->bits, &v, v | MAG_LOCKED,
                                                       memory_order_acquire, memory_order_relaxed)) {
-                mag_debug_post_lock(m);
+                mag_debug_post_lock(mod);
                 return;
             }
             continue;
@@ -227,16 +227,16 @@ void MagMutex_LockSlow(MagMutex *m) {
 
         // Ensure the MAG_HAS_WAITERS bit is set before we actually sleep.
         if (!(v & MAG_HAS_WAITERS)) {
-            if (!atomic_compare_exchange_weak_explicit(&m->bits, &v, v | MAG_HAS_WAITERS,
+            if (!atomic_compare_exchange_weak_explicit(&mod->bits, &v, v | MAG_HAS_WAITERS,
                                                        memory_order_relaxed, memory_order_relaxed))
                 continue;
         }
 
 #ifdef MAG_DEBUG
-        atomic_fetch_add_explicit(&m->park_count, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&mod->park_count, 1, memory_order_relaxed);
 #endif
 
-        Waiter node = {.address = m, .next = nullptr};
+        Waiter node = {.address = mod, .next = nullptr};
         atomic_init(&node.signaled, false);
         PLAT_CND_INIT(&node.cond);
 
@@ -246,7 +246,7 @@ void MagMutex_LockSlow(MagMutex *m) {
         // RE-CHECK LOCK STATE (The "Gatekeeper" Pattern)
         // This prevents the lost-wakeup race where the lock is released
         // between the initial check and the PLAT_MTX_LOCK.
-        v = atomic_load_explicit(&m->bits, memory_order_relaxed);
+        v = atomic_load_explicit(&mod->bits, memory_order_relaxed);
         if (MAG_UNLIKELY(!(v & MAG_LOCKED) || !(v & MAG_HAS_WAITERS))) {
             PLAT_MTX_UNLOCK(&bucket->mutex);
             PLAT_CND_DESTROY(&node.cond);
@@ -272,11 +272,11 @@ void MagMutex_LockSlow(MagMutex *m) {
 }
 
 [[gnu::cold, gnu::noinline, gnu::visibility("hidden"), gnu::nonnull(1)]]
-void MagMutex_UnlockSlow(MagMutex *m) {
-    uint8_t v = atomic_load_explicit(&m->bits, memory_order_relaxed);
+void MagMutex_UnlockSlow(MagMutex *mod) {
+    uint8_t v = atomic_load_explicit(&mod->bits, memory_order_relaxed);
     for (;;) {
         uint8_t desired = v & ~MAG_LOCKED;
-        if (atomic_compare_exchange_weak_explicit(&m->bits, &v, desired, memory_order_release,
+        if (atomic_compare_exchange_weak_explicit(&mod->bits, &v, desired, memory_order_release,
                                                   memory_order_relaxed)) {
             if (!(v & MAG_HAS_WAITERS))
                 return;
@@ -284,7 +284,7 @@ void MagMutex_UnlockSlow(MagMutex *m) {
         }
     }
 
-    size_t hash    = hash_address(m);
+    size_t hash    = hash_address(mod);
     Bucket *bucket = &parking_lot[hash];
     PLAT_MTX_LOCK(&bucket->mutex);
 
@@ -293,20 +293,20 @@ void MagMutex_UnlockSlow(MagMutex *m) {
     bool more       = false;
 
     while (*curr != nullptr) {
-        if ((*curr)->address == m && to_wake == nullptr) {
+        if ((*curr)->address == mod && to_wake == nullptr) {
             to_wake = *curr;
             *curr   = to_wake->next;
             continue;
         }
-        if ((*curr)->address == m)
+        if ((*curr)->address == mod)
             more = true;
         curr = &((*curr)->next);
     }
 
     if (!more) {
-        v = atomic_load_explicit(&m->bits, memory_order_relaxed);
+        v = atomic_load_explicit(&mod->bits, memory_order_relaxed);
         for (;;) {
-            if (atomic_compare_exchange_weak_explicit(&m->bits, &v, v & ~MAG_HAS_WAITERS,
+            if (atomic_compare_exchange_weak_explicit(&mod->bits, &v, v & ~MAG_HAS_WAITERS,
                                                       memory_order_relaxed, memory_order_relaxed))
                 break;
         }
@@ -323,16 +323,16 @@ void MagMutex_UnlockSlow(MagMutex *m) {
 // MagCond Implementation
 // ============================================================================
 
-void MagCond_Wait(MagCond *cv, MagMutex *m) {
-    size_t hash    = hash_address(cv);
+void MagCond_Wait(MagCond *condvar, MagMutex *mod) {
+    size_t hash    = hash_address(condvar);
     Bucket *bucket = &parking_lot[hash];
 
-    Waiter node = {.address = cv, .next = nullptr};
+    Waiter node = {.address = condvar, .next = nullptr};
     atomic_init(&node.signaled, false);
     PLAT_CND_INIT(&node.cond);
 
     // Fast-path bit: let signalers know someone is waiting
-    atomic_store_explicit(&cv->bits, 1, memory_order_relaxed);
+    atomic_store_explicit(&condvar->bits, 1, memory_order_relaxed);
 
     // Step 1: Enqueue our waiter node FIRST
     PLAT_MTX_LOCK(&bucket->mutex);
@@ -342,7 +342,7 @@ void MagCond_Wait(MagCond *cv, MagMutex *m) {
 
     // Step 2: Safely unlock the user's mutex.
     // Any Thread calling Signal after this point will find our node.
-    MagMutex_Unlock(m);
+    MagMutex_Unlock(mod);
 
     // Step 3: Wait for the signal
     PLAT_MTX_LOCK(&bucket->mutex);
@@ -354,17 +354,17 @@ void MagCond_Wait(MagCond *cv, MagMutex *m) {
     PLAT_CND_DESTROY(&node.cond);
 
     // Step 4: Re-acquire the user's mutex before returning
-    MagMutex_Lock(m);
+    MagMutex_Lock(mod);
 }
 
-void MagCond_Signal(MagCond *cv) {
+void MagCond_Signal(MagCond *condvar) {
     // Fast path: if no waiters exist, bail out immediately without taking the bucket lock.
     // (This is completely safe due to the Acquire/Release relationship of the user's Mutex).
-    if (atomic_load_explicit(&cv->bits, memory_order_relaxed) == 0) {
+    if (atomic_load_explicit(&condvar->bits, memory_order_relaxed) == 0) {
         return;
     }
 
-    size_t hash    = hash_address(cv);
+    size_t hash    = hash_address(condvar);
     Bucket *bucket = &parking_lot[hash];
     PLAT_MTX_LOCK(&bucket->mutex);
 
@@ -374,19 +374,19 @@ void MagCond_Signal(MagCond *cv) {
 
     // Extract the first waiter waiting on this specific CV address
     while (*curr != nullptr) {
-        if ((*curr)->address == cv && to_wake == nullptr) {
+        if ((*curr)->address == condvar && to_wake == nullptr) {
             to_wake = *curr;
             *curr   = to_wake->next;
             continue;
         }
-        if ((*curr)->address == cv) {
+        if ((*curr)->address == condvar) {
             more = true;
         }
         curr = &((*curr)->next);
     }
 
     if (!more) {
-        atomic_store_explicit(&cv->bits, 0, memory_order_relaxed);
+        atomic_store_explicit(&condvar->bits, 0, memory_order_relaxed);
     }
 
     if (to_wake != nullptr) {
@@ -396,31 +396,31 @@ void MagCond_Signal(MagCond *cv) {
     PLAT_MTX_UNLOCK(&bucket->mutex);
 }
 
-void MagCond_Broadcast(MagCond *cv) {
-    if (atomic_load_explicit(&cv->bits, memory_order_relaxed) == 0) {
+void MagCond_Broadcast(MagCond *condvar) {
+    if (atomic_load_explicit(&condvar->bits, memory_order_relaxed) == 0) {
         return;
     }
 
-    size_t hash    = hash_address(cv);
+    size_t hash    = hash_address(condvar);
     Bucket *bucket = &parking_lot[hash];
     PLAT_MTX_LOCK(&bucket->mutex);
 
-    Waiter **curr   = &bucket->head;
+    Waiter **curr     = &bucket->head;
     Waiter *wake_list = nullptr;
 
     while (*curr != nullptr) {
-        if ((*curr)->address == cv) {
+        if ((*curr)->address == condvar) {
             Waiter *w = *curr;
-            *curr = w->next; // Unlink from bucket
-            
-            w->next = wake_list; // Link to local stack wake_list
+            *curr     = w->next; // Unlink from bucket
+
+            w->next   = wake_list; // Link to local stack wake_list
             wake_list = w;
         } else {
             curr = &((*curr)->next);
         }
     }
 
-    atomic_store_explicit(&cv->bits, 0, memory_order_relaxed);
+    atomic_store_explicit(&condvar->bits, 0, memory_order_relaxed);
 
     // Wake all extracted nodes
     while (wake_list != nullptr) {

@@ -68,7 +68,7 @@ using std::memory_order_release;
 #    define MAG_ALWAYS_INLINE
 #    define MAG_ASSUME(x) (x)
 #endif
-
+// NOLINTBEGIN(readability-identifier-naming)
 #if defined(_WIN32)
 #    include <windows.h>
 typedef CRITICAL_SECTION plat_mtx_t;
@@ -99,7 +99,7 @@ typedef pthread_t plat_thread_id_t;
 #    define PLAT_CURRENT_THREAD() pthread_self()
 #    define PLAT_THREADS_EQUAL(t1, t2) pthread_equal((t1), (t2))
 #endif
-
+// NOLINTEND(readability-identifier-naming)
 // --- Memory Ordering Configuration ---
 
 #if defined(MAG_FORCE_CASAL)
@@ -118,13 +118,18 @@ constexpr uint8_t MAG_UNLOCKED    = 0x00;
 constexpr uint8_t MAG_LOCKED      = 0x01;
 constexpr uint8_t MAG_HAS_WAITERS = 0x02;
 constexpr uint8_t MAG_POISONED    = 0x04;
-
+#ifdef MAG_DEBUG
+constexpr uint8_t MAG_DEBUG_ALIGN = 32;
+#endif
 /**
  * @struct MagMutex
  * @brief The core mutex structure.
  */
 typedef struct MagMutex {
-    MAG_ATOMIC(uint8_t) bits;
+#ifdef MAG_DEBUG
+    alignas(MAG_DEBUG_ALIGN)
+#endif
+        MAG_ATOMIC(uint8_t) bits;
 #ifdef MAG_DEBUG
     MAG_ATOMIC(bool) has_owner;
     MAG_ATOMIC(plat_thread_id_t) owner;
@@ -136,26 +141,33 @@ typedef struct MagMutex {
 // --- Debug Prototypes ---
 
 #ifdef MAG_DEBUG
-void mag_debug_check_pre_lock(MagMutex *m);
-void mag_debug_post_lock(MagMutex *m);
-void mag_debug_pre_unlock(MagMutex *m);
-void mag_debug_clear_owner(MagMutex *m);
+void mag_debug_check_pre_lock(MagMutex *mod);
+void mag_debug_post_lock(MagMutex *mod);
+void mag_debug_pre_unlock(MagMutex *mod);
+void mag_debug_clear_owner(MagMutex *mod);
 #else
-static inline void mag_debug_check_pre_lock(MagMutex *m) { (void)m; }
-static inline void mag_debug_post_lock(MagMutex *m) { (void)m; }
-static inline void mag_debug_pre_unlock(MagMutex *m) { (void)m; }
-static inline void mag_debug_clear_owner(MagMutex *m) { (void)m; }
+static inline void mag_debug_check_pre_lock(MagMutex *mod) { (void)mod; }
+static inline void mag_debug_post_lock(MagMutex *mod) { (void)mod; }
+static inline void mag_debug_pre_unlock(MagMutex *mod) { (void)mod; }
+static inline void mag_debug_clear_owner(MagMutex *mod) { (void)mod; }
 #endif
 
 [[gnu::cold, gnu::noinline, gnu::visibility("hidden"), gnu::nonnull(1)]]
-void MagMutex_LockSlow(MagMutex *m);
+// NOLINTNEXTLINE(readability-identifier-naming)
+void MagMutex_LockSlow(MagMutex *mod);
 [[gnu::cold, gnu::noinline, gnu::visibility("hidden"), gnu::nonnull(1)]]
-void MagMutex_UnlockSlow(MagMutex *m);
+// NOLINTNEXTLINE(readability-identifier-naming)
+void MagMutex_UnlockSlow(MagMutex *mod);
 
 // --- Public API ---
 
-// Pure CPU pause. Removed sched_yield which causes severe OS stalls under high
-// contention.
+// NOLINTBEGIN(hicpp-no-assembler, cppcoreguidelines-pro-type-inline-assembly)
+/**
+ * Mag_CPURelax: Hardware-specific hint to the CPU that we are in a spin-loop.
+ * On ARM64 (Apple Silicon), this uses the 'yield' instruction to save power
+ * and potentially allow the other SMT thread to progress.
+ */
+// NOLINTNEXTLINE(readability-identifier-naming)
 static inline void Mag_CPURelax() {
 #if defined(__aarch64__)
     __asm__ __volatile__("yield" ::: "memory");
@@ -165,12 +177,14 @@ static inline void Mag_CPURelax() {
     YieldProcessor();
 #endif
 }
+// NOLINTEND(hicpp-no-assembler, cppcoreguidelines-pro-type-inline-assembly)
 
 /**
  * @brief Permanently poisons the mutex. Any subsequent lock attempt will abort.
  */
-static inline void MagMutex_Poison(MagMutex *m) {
-    atomic_fetch_or_explicit(&m->bits, MAG_POISONED, memory_order_release);
+// NOLINTNEXTLINE(readability-identifier-naming)
+static inline void MagMutex_Poison(MagMutex *mod) {
+    atomic_fetch_or_explicit(&mod->bits, MAG_POISONED, memory_order_release);
 }
 
 /**
@@ -178,13 +192,14 @@ static inline void MagMutex_Poison(MagMutex *m) {
  * @return true if acquired, false if contended.
  */
 [[gnu::flatten]] [[gnu::hot]] [[gnu::always_inline]] [[gnu::artificial]]
-static inline bool MagMutex_TryLock(MagMutex *m) {
-    mag_debug_check_pre_lock(m);
+// NOLINTNEXTLINE(readability-identifier-naming)
+static inline bool MagMutex_TryLock(MagMutex *mod) {
+    mag_debug_check_pre_lock(mod);
     uint8_t expected = MAG_UNLOCKED;
-    bool success =
-        MAG_ATOMIC_CX(&m->bits, &expected, MAG_LOCKED, memory_order_acquire, memory_order_relaxed);
+    bool success     = MAG_ATOMIC_CX(&mod->bits, &expected, MAG_LOCKED, memory_order_acquire,
+                                     memory_order_relaxed);
     if (success) {
-        mag_debug_post_lock(m);
+        mag_debug_post_lock(mod);
     }
     return success;
 }
@@ -195,16 +210,17 @@ static inline bool MagMutex_TryLock(MagMutex *m) {
  * Otherwise, emits 'casab' (Acquire).
  */
 [[gnu::flatten, gnu::hot, gnu::always_inline, gnu::artificial, gnu::nonnull(1)]]
-static inline void MagMutex_Lock(MagMutex *m) {
-    mag_debug_check_pre_lock(m);
+// NOLINTNEXTLINE(readability-identifier-naming)
+static inline void MagMutex_Lock(MagMutex *mod) {
+    mag_debug_check_pre_lock(mod);
     uint8_t expected = MAG_UNLOCKED;
 
-    if (MAG_LIKELY(
-            MAG_ATOMIC_CX(&m->bits, &expected, MAG_LOCKED, MAG_LOCK_ORDER, memory_order_relaxed))) {
-        mag_debug_post_lock(m);
+    if (MAG_LIKELY(MAG_ATOMIC_CX(&mod->bits, &expected, MAG_LOCKED, MAG_LOCK_ORDER,
+                                 memory_order_relaxed))) {
+        mag_debug_post_lock(mod);
         return;
     }
-    MagMutex_LockSlow(m);
+    MagMutex_LockSlow(mod);
 }
 
 /**
@@ -213,17 +229,18 @@ static inline void MagMutex_Lock(MagMutex *m) {
  * Otherwise, emits 'caslb' (Release).
  */
 [[gnu::flatten, gnu::hot, gnu::always_inline, gnu::artificial, gnu::nonnull(1)]]
-static inline void MagMutex_Unlock(MagMutex *m) {
-    mag_debug_pre_unlock(m);
-    mag_debug_clear_owner(m);
+// NOLINTNEXTLINE(readability-identifier-naming)
+static inline void MagMutex_Unlock(MagMutex *mod) {
+    mag_debug_pre_unlock(mod);
+    mag_debug_clear_owner(mod);
 
     uint8_t expected = MAG_LOCKED;
 
-    if (MAG_LIKELY(MAG_ATOMIC_CX(&m->bits, &expected, MAG_UNLOCKED, MAG_UNLOCK_ORDER,
+    if (MAG_LIKELY(MAG_ATOMIC_CX(&mod->bits, &expected, MAG_UNLOCKED, MAG_UNLOCK_ORDER,
                                  memory_order_relaxed))) {
         return;
     }
-    MagMutex_UnlockSlow(m);
+    MagMutex_UnlockSlow(mod);
 }
 
 // --- MagCond (Condition Variable) ---
@@ -242,11 +259,12 @@ typedef struct MagCond {
 /**
  * @brief Initializes a MagCond.
  */
-static inline void MagCond_Init(MagCond *cv) {
+// NOLINTNEXTLINE(readability-identifier-naming)
+static inline void MagCond_Init(MagCond *condvar) {
 #ifdef __cplusplus
     cv->bits.store(0, std::memory_order_relaxed);
 #else
-    atomic_init(&cv->bits, 0);
+    atomic_init(&condvar->bits, 0);
 #endif
 }
 
@@ -255,14 +273,17 @@ static inline void MagCond_Init(MagCond *cv) {
  * variable. Upon successful return, the mutex shall have been locked and is owned by the calling
  * thread.
  */
-void MagCond_Wait(MagCond *cv, MagMutex *m);
+// NOLINTNEXTLINE(readability-identifier-naming)
+void MagCond_Wait(MagCond *condvar, MagMutex *mod);
 
 /**
  * @brief Unblocks at least one of the threads that are blocked on the specified condition variable.
  */
-void MagCond_Signal(MagCond *cv);
+// NOLINTNEXTLINE(readability-identifier-naming)
+void MagCond_Signal(MagCond *condvar);
 
 /**
  * @brief Unblocks all threads currently blocked on the specified condition variable.
  */
-void MagCond_Broadcast(MagCond *cv);
+// NOLINTNEXTLINE(readability-identifier-naming)
+void MagCond_Broadcast(MagCond *condvar);
