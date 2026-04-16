@@ -74,13 +74,13 @@ using std::memory_order_release;
 typedef CRITICAL_SECTION plat_mtx_t;
 typedef CONDITION_VARIABLE plat_cnd_t;
 typedef DWORD plat_thread_id_t;
-#    define PLAT_MTX_INIT(m) InitializeCriticalSection(m)
-#    define PLAT_MTX_LOCK(m) EnterCriticalSection(m)
-#    define PLAT_MTX_UNLOCK(m) LeaveCriticalSection(m)
-#    define PLAT_CND_INIT(c) InitializeConditionVariable(c)
-#    define PLAT_CND_WAIT(c, m) SleepConditionVariableCS(c, m, INFINITE)
-#    define PLAT_CND_SIGNAL(c) WakeConditionVariable(c)
-#    define PLAT_CND_DESTROY(c)
+#    define PLAT_MTX_INIT(mod) InitializeCriticalSection(mod)
+#    define PLAT_MTX_LOCK(mod) EnterCriticalSection(mod)
+#    define PLAT_MTX_UNLOCK(mod) LeaveCriticalSection(mod)
+#    define PLAT_CND_INIT(condvar) InitializeConditionVariable(condvar)
+#    define PLAT_CND_WAIT(condvar, mod) SleepConditionVariableCS(condvar, mod, INFINITE)
+#    define PLAT_CND_SIGNAL(condvar) WakeConditionVariable(condvar)
+#    define PLAT_CND_DESTROY(condvar)
 #    define PLAT_CURRENT_THREAD() GetCurrentThreadId()
 #    define PLAT_THREADS_EQUAL(t1, t2) ((t1) == (t2))
 #else
@@ -89,13 +89,13 @@ typedef DWORD plat_thread_id_t;
 typedef pthread_mutex_t plat_mtx_t;
 typedef pthread_cond_t plat_cnd_t;
 typedef pthread_t plat_thread_id_t;
-#    define PLAT_MTX_INIT(m) pthread_mutex_init(m, nullptr)
-#    define PLAT_MTX_LOCK(m) pthread_mutex_lock(m)
-#    define PLAT_MTX_UNLOCK(m) pthread_mutex_unlock(m)
-#    define PLAT_CND_INIT(c) pthread_cond_init(c, nullptr)
-#    define PLAT_CND_WAIT(c, m) pthread_cond_wait(c, m)
-#    define PLAT_CND_SIGNAL(c) pthread_cond_signal(c)
-#    define PLAT_CND_DESTROY(c) pthread_cond_destroy(c)
+#    define PLAT_MTX_INIT(mod) pthread_mutex_init(mod, nullptr)
+#    define PLAT_MTX_LOCK(mod) pthread_mutex_lock(mod)
+#    define PLAT_MTX_UNLOCK(mod) pthread_mutex_unlock(mod)
+#    define PLAT_CND_INIT(condvar) pthread_cond_init(condvar, nullptr)
+#    define PLAT_CND_WAIT(condvar, mod) pthread_cond_wait(condvar, mod)
+#    define PLAT_CND_SIGNAL(condvar) pthread_cond_signal(condvar)
+#    define PLAT_CND_DESTROY(condvar) pthread_cond_destroy(condvar)
 #    define PLAT_CURRENT_THREAD() pthread_self()
 #    define PLAT_THREADS_EQUAL(t1, t2) pthread_equal((t1), (t2))
 #endif
@@ -262,7 +262,7 @@ typedef struct MagCond {
 // NOLINTNEXTLINE(readability-identifier-naming)
 static inline void MagCond_Init(MagCond *condvar) {
 #ifdef __cplusplus
-    cv->bits.store(0, std::memory_order_relaxed);
+    condvar->bits.store(0, std::memory_order_relaxed);
 #else
     atomic_init(&condvar->bits, 0);
 #endif
