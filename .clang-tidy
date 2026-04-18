@@ -33,7 +33,7 @@ CheckOptions:
   - key:             readability-identifier-naming.FunctionPrefix
     value:           mag_
   - key:             readability-identifier-naming.StructCase
-    value:           PascalCase
+    value:           CamelCase
   - key:             readability-identifier-naming.StructPrefix
     value:           Mag
   - key:             readability-identifier-naming.ConstantCase
