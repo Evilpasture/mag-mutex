@@ -70,7 +70,20 @@ using std::memory_order_release;
 #endif
 // NOLINTBEGIN(readability-identifier-naming)
 #if defined(_WIN32)
+#    ifndef WIN32_LEAN_AND_MEAN
+#        define WIN32_LEAN_AND_MEAN
+#    endif
+#    ifndef NOMINMAX
+#        define NOMINMAX
+#    endif
 #    include <windows.h>
+
+/* --- I HATE WINDOWS --- */
+#    undef MemoryBarrier
+#    undef far
+#    undef near
+#    undef ERROR
+/* ---------------------- */
 typedef CRITICAL_SECTION plat_mtx_t;
 typedef CONDITION_VARIABLE plat_cnd_t;
 typedef DWORD plat_thread_id_t;
