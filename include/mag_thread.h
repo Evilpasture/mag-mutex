@@ -10,14 +10,18 @@ typedef void (*MagThreadFunc)(void *arg);
 
 typedef struct MagThread MagThread;
 struct MagThread {
-    void *sp;
-    void *map_addr;
+    void* sp;
+    void* map_addr;
     size_t map_size;
     MagThreadFunc func;
-    void *arg;
+    void* arg;
     bool is_finished;
     bool is_main;
-    MagThread *caller;
+    MagThread* caller;
+#if defined(_WIN32)
+    void* stack_base;
+    void* stack_limit;
+#endif
 };
 
 void MagThread_InitMain(void);

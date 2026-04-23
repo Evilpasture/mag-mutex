@@ -32,10 +32,10 @@ static struct {
     const MagMutex *from;
     const MagMutex *to;
 } lock_edges[MAX_DEBUG_EDGES];
-static int num_lock_edges = 0;
+static size_t num_lock_edges = 0;
 
 static thread_local const MagMutex *held_locks[MAX_HELD_LOCKS];
-static thread_local int held_locks_count = 0;
+static thread_local size_t held_locks_count = 0;
 
 static inline uintptr_t mag_get_current_id(void) {
     MagThread *fiber = MagThread_GetCurrent();
@@ -50,7 +50,7 @@ static inline uintptr_t mag_get_current_id(void) {
 static bool dfs_check_cycle(const MagMutex *current, const MagMutex *target) {
     if (current == target)
         return true;
-    for (int i = 0; i < num_lock_edges; i++) {
+    for (size_t i = 0; i < num_lock_edges; i++) {
         if (lock_edges[i].from == current) {
             if (dfs_check_cycle(lock_edges[i].to, target))
                 return true;
@@ -62,7 +62,7 @@ static bool dfs_check_cycle(const MagMutex *current, const MagMutex *target) {
 static void add_lock_edge(const MagMutex *from, const MagMutex *to) {
     PLAT_MTX_LOCK(&debug_graph_mutex);
 
-    for (int i = 0; i < num_lock_edges; i++) {
+    for (size_t i = 0; i < num_lock_edges; i++) {
         if (lock_edges[i].from == from && lock_edges[i].to == to) {
             PLAT_MTX_UNLOCK(&debug_graph_mutex);
             return;
@@ -111,7 +111,7 @@ void mag_debug_post_lock(MagMutex *mod) {
     atomic_store_explicit(&mod->owner, mag_get_current_id(), memory_order_relaxed);
     atomic_store_explicit(&mod->has_owner, true, memory_order_release);
 
-    for (int i = 0; i < held_locks_count; i++) {
+    for (size_t i = 0; i < held_locks_count; i++) {
         add_lock_edge(held_locks[i], mod);
     }
     if (held_locks_count < MAX_HELD_LOCKS) {
@@ -133,9 +133,9 @@ void mag_debug_pre_unlock(MagMutex *mod) {
         abort();
     }
 
-    for (int i = held_locks_count - 1; i >= 0; i--) {
+    for (size_t i = held_locks_count - 1; i < held_locks_count; i--) {
         if (held_locks[i] == mod) {
-            for (int j = i; j < held_locks_count - 1; j++) {
+            for (size_t j = i; j < held_locks_count - 1; j++) {
                 held_locks[j] = held_locks[j + 1];
             }
             held_locks_count--;
@@ -193,7 +193,7 @@ void MagMutex_LockSlow(MagMutex *mod) {
     // --- PHASE 1: Adaptive Exponential Backoff Spin ---
     // We increase the number of Mag_CPURelax() calls per iteration.
     // On ARM64/Apple Silicon, 'yield' is very cheap, so we need a significant count.
-    int backoff_limit = 1;
+    size_t backoff_limit = 1;
 
     for (int i = 0; i < MAX_SPIN_COUNT; i++) {
         uint8_t v = atomic_load_explicit(&mod->bits, memory_order_relaxed);
@@ -214,7 +214,7 @@ void MagMutex_LockSlow(MagMutex *mod) {
             return;
 
         // Perform the exponential backoff
-        for (int j = 0; j < backoff_limit; j++) {
+        for (size_t j = 0; j < backoff_limit; j++) {
             Mag_CPURelax();
         }
 

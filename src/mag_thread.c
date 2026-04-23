@@ -1,16 +1,20 @@
 #include "mag_thread.h"
-#include "mag_mutex.h"
 #include <assert.h>
 #include <stdlib.h>
-#include <sys/mman.h>
-#include <unistd.h>
+#include <stdio.h>
 
-// Cache page size at startup
-static long g_page_size = 0;
-[[gnu::constructor]] static void _mag_init_page_size() { g_page_size = sysconf(_SC_PAGESIZE); }
+#if defined(_WIN32)
+#    include <windows.h>
+#else
+#    include <sys/mman.h>
+#    include <unistd.h>
+#endif
+
+// Forward declaration to satisfy -Wmissing-prototypes and asm calls
+void mag_trampoline(void);
 
 // ----------------------------------------------------------------------------
-// 1. Optimized Context Switch
+// 1. Cross-Platform Assembly Context Switch
 // ----------------------------------------------------------------------------
 
 [[gnu::naked, gnu::noinline, gnu::hot, gnu::visibility("hidden"), gnu::no_stack_protector]]
@@ -41,133 +45,206 @@ static void mag_switch(void **old_sp, void *new_sp) {
                      "ldp d12, d13, [sp, #0x80] \n"
                      "ldp d14, d15, [sp, #0x90] \n"
                      "add sp, sp, #160 \n"
-                     "ret \n");
+                     "ret \n"
+                     :
+                     :
+                     : "memory");
 #elif defined(__x86_64__)
+#    if defined(_WIN32)
+    __asm__ volatile(
+        "push %%rbp; push %%rbx; push %%rdi; push %%rsi; push %%r12; push %%r13; push %%r14; push %%r15 \n"
+        "sub $160, %%rsp \n" 
+        "movups %%xmm6, 0(%%rsp);   movups %%xmm7, 16(%%rsp);  movups %%xmm8, 32(%%rsp);  movups %%xmm9, 48(%%rsp) \n"
+        "movups %%xmm10, 64(%%rsp); movups %%xmm11, 80(%%rsp); movups %%xmm12, 96(%%rsp); movups %%xmm13, 112(%%rsp) \n"
+        "movups %%xmm14, 128(%%rsp); movups %%xmm15, 144(%%rsp) \n"
+
+        "mov %%rsp, (%%rcx) \n"
+        "mov %%rdx, %%rsp \n"
+
+        "movups 0(%%rsp), %%xmm6;   movups 16(%%rsp), %%xmm7;  movups 32(%%rsp), %%xmm8;  movups 48(%%rsp), %%xmm9 \n"
+        "movups 64(%%rsp), %%xmm10; movups 80(%%rsp), %%xmm11; movups 96(%%rsp), %%xmm12; movups 112(%%rsp), %%xmm13 \n"
+        "movups 128(%%rsp), %%xmm14; movups 144(%%rsp), %%xmm15 \n"
+        "add $160, %%rsp \n"
+        "pop %%r15; pop %%r14; pop %%r13; pop %%r12; pop %%rsi; pop %%rdi; pop %%rbx; pop %%rbp \n"
+        "ret \n" 
+        :
+        :
+        : "memory");
+#    else
     __asm__ volatile("push %%rbp; push %%rbx; push %%r12; push %%r13; push %%r14; push %%r15 \n"
                      "mov %%rsp, (%%rdi) \n"
                      "mov %%rsi, %%rsp \n"
                      "pop %%r15; pop %%r14; pop %%r13; pop %%r12; pop %%rbx; pop %%rbp \n"
-                     "ret \n" ::
-                         : "memory");
+                     "ret \n" 
+                     :
+                     :
+                     : "memory");
+#    endif
 #endif
 }
 
 // ----------------------------------------------------------------------------
-// 2. Scheduler State
+// 2. Scheduler State & Trampoline
 // ----------------------------------------------------------------------------
 
 static thread_local MagThread t_main_thread;
 static thread_local MagThread *t_current_thread = nullptr;
 
-[[gnu::noreturn]] static void mag_trampoline(void) {
+[[gnu::used, gnu::noinline, gnu::visibility("hidden")]]
+void mag_trampoline(void) {
     MagThread *me = t_current_thread;
-    me->func(me->arg);
+    if (me->func)
+        me->func(me->arg);
     me->is_finished = true;
     while (true)
         MagThread_Yield();
 }
 
+[[gnu::naked]] static void mag_trampoline_thunk(void) {
+#if defined(__aarch64__)
+    __asm__ volatile("b mag_trampoline \n");
+#elif defined(__x86_64__)
+#    if defined(_WIN32)
+    __asm__ volatile(
+        "sub $40, %%rsp \n"
+        "call mag_trampoline \n" 
+        "add $40, %%rsp \n"
+        "ret \n"
+        : : : "memory"); // Colons required to use %% register prefix
+#    else
+    __asm__ volatile(
+        "sub $8, %%rsp \n" 
+        "call mag_trampoline \n" 
+        "add $8, %%rsp \n"
+        "ret \n"
+        : : : "memory");
+#    endif
+#endif
+}
+
 // ----------------------------------------------------------------------------
-// 3. Optimized API
+// 3. API Implementation
 // ----------------------------------------------------------------------------
+
+static long g_page_size = 0;
+[[gnu::constructor]] static void _mag_init_page_size(void) {
+#if defined(_WIN32)
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    g_page_size = (long)si.dwPageSize;
+#else
+    g_page_size = sysconf(_SC_PAGESIZE);
+#endif
+}
 
 void MagThread_InitMain(void) {
     t_main_thread.is_finished = false;
     t_main_thread.is_main     = true;
     t_main_thread.caller      = nullptr;
-    t_current_thread          = &t_main_thread;
+#if defined(_WIN32)
+    NT_TIB *tib               = (NT_TIB *)NtCurrentTeb();
+    t_main_thread.stack_base  = tib->StackBase;
+    t_main_thread.stack_limit = tib->StackLimit;
+#endif
+    t_current_thread = &t_main_thread;
 }
 
-[[nodiscard, gnu::malloc, gnu::hot, gnu::nonnull(2)]]
+[[nodiscard, gnu::malloc]]
 MagThread *MagThread_Create(size_t stack_size, MagThreadFunc func, void *arg) {
-    // 1. Normalize stack size to page boundaries.
-    if (MAG_UNLIKELY(stack_size == 0)) {
-        stack_size = 1024 * 1024; // 1MB Default
-    }
-    stack_size = (stack_size + g_page_size - 1) & ~(g_page_size - 1);
-
-    // 2. Layout: [Guard Page (PROT_NONE)] [Stack Memory] [Metadata Page]
-    // We allocate an extra page for the control block to avoid "stealing"
-    // space from the user's requested stack and to keep metadata isolated.
+    if (stack_size == 0)
+        stack_size = 1024 * 1024;
+    stack_size        = (stack_size + g_page_size - 1) & ~(g_page_size - 1);
     size_t total_size = stack_size + (g_page_size * 2);
 
-    void *map =
-        mmap(nullptr, total_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void *map;
+#if defined(_WIN32)
+    map = VirtualAlloc(NULL, total_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!map) return nullptr;
+    DWORD old;
+    VirtualProtect(map, g_page_size, PAGE_READWRITE | PAGE_GUARD, &old);
+#else
+    map = mmap(nullptr, total_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (map == MAP_FAILED) return nullptr;
+    mprotect(map, g_page_size, PROT_NONE);
+#endif
 
-    if (MAG_UNLIKELY(map == MAP_FAILED)) {
-        return nullptr;
-    }
-
-    // 3. Apply Hardware Minefield (Bottom Guard Page)
-    if (MAG_UNLIKELY(mprotect(map, g_page_size, PROT_NONE) != 0)) {
-        munmap(map, total_size);
-        return nullptr;
-    }
-
-    // 4. Place MagThread control block at the very top of the mapping.
-    // We align downward from the end address to a 16-byte boundary to satisfy
-    // strict alignment requirements for 64-bit pointers and SIMD state.
     uintptr_t end_addr    = (uintptr_t)map + total_size;
     uintptr_t thread_addr = (end_addr - sizeof(MagThread)) & ~15ULL;
     MagThread *thread     = (MagThread *)thread_addr;
 
-    // 5. Initialize fields (Fast path: avoids calloc/memset overhead)
     thread->map_addr    = map;
     thread->map_size    = total_size;
     thread->func        = func;
     thread->arg         = arg;
     thread->is_finished = false;
     thread->is_main     = false;
-    thread->caller      = nullptr;
 
-    // 6. Forge the initial stack frame.
-    // We start the stack just below our control block.
-    // thread_addr is already 16-byte aligned.
+#if defined(_WIN32)
+    thread->stack_base  = (void *)end_addr;
+    thread->stack_limit = (void *)((uintptr_t)map + g_page_size);
+#endif
+
     uintptr_t sp = thread_addr;
-
 #if defined(__aarch64__)
-    // ARM64: Reserve 160 bytes for callee-saved registers (x19-x28),
-    // Frame Pointer (x29), and Link Register (x30).
     sp -= 160;
-    uint64_t *stack_ptr = (uint64_t *)sp;
-
-    // x29 (FP) is at index 10, x30 (LR) is at index 11.
-    stack_ptr[10] = 0;
-    stack_ptr[11] = (uintptr_t)mag_trampoline;
+    ((uint64_t *)sp)[11] = (uintptr_t)mag_trampoline_thunk; 
 #elif defined(__x86_64__)
-    // x86_64: Subtract 8 for the return address, then 48 for callee-saved regs.
+#    if defined(_WIN32)
+    sp -= 8; // Align
+    *(uintptr_t *)sp = 0;
+    sp -= 8; 
+    *(uintptr_t *)sp = (uintptr_t)mag_trampoline_thunk;
+    sp -= 224; // 160 XMM + 64 GPR
+    for (int i = 0; i < 28; i++) ((uintptr_t *)sp)[i] = 0;
+#    else
     sp -= 8;
-    *(uintptr_t *)sp = (uintptr_t)mag_trampoline;
-
-    sp -= 48; // Space for rbp, rbx, r12, r13, r14, r15
-    for (int i = 0; i < 6; i++) {
-        ((uintptr_t *)sp)[i] = 0;
-    }
+    *(uintptr_t *)sp = (uintptr_t)mag_trampoline_thunk;
+    sp -= 48;
+    for (int i = 0; i < 6; i++) ((uintptr_t *)sp)[i] = 0;
+#    endif
 #endif
 
     thread->sp = (void *)sp;
     return thread;
 }
 
+static inline void mag_swap_teb(MagThread *target) {
+#if defined(_WIN32)
+    NT_TIB* tib = (NT_TIB*)NtCurrentTeb();
+    t_current_thread->stack_base = tib->StackBase;
+    t_current_thread->stack_limit = tib->StackLimit;
+    tib->StackBase = target->stack_base;
+    tib->StackLimit = target->stack_limit;
+#else
+    (void)target;
+#endif
+}
+
 [[gnu::always_inline]] MagThread *MagThread_GetCurrent(void) { return t_current_thread; }
 
-[[gnu::hot]] void MagThread_Resume(MagThread *target) {
-    MagThread *me    = t_current_thread;
-    target->caller   = me;
+void MagThread_Resume(MagThread *target) {
+    MagThread *me  = t_current_thread;
+    target->caller = me;
+    mag_swap_teb(target);
     t_current_thread = target;
     mag_switch(&me->sp, target->sp);
 }
 
-[[gnu::hot]] void MagThread_Yield(void) {
+void MagThread_Yield(void) {
     MagThread *me     = t_current_thread;
     MagThread *target = me->caller;
-    t_current_thread  = target;
+    if (!target) return;
+    mag_swap_teb(target);
+    t_current_thread = target;
     mag_switch(&me->sp, target->sp);
 }
 
 void MagThread_Destroy(MagThread *thread) {
     if (thread) {
-        // Since the struct is inside the map, munmap frees everything
+#if defined(_WIN32)
+        VirtualFree(thread->map_addr, 0, MEM_RELEASE);
+#else
         munmap(thread->map_addr, thread->map_size);
+#endif
     }
 }

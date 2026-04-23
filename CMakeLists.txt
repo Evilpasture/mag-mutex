@@ -27,36 +27,45 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # 1. DEPENDENCIES & FEATURE DETECTION
 # ==============================================================================
 find_package(Threads REQUIRED)
-find_package(OpenMP REQUIRED)
+
+# Make OpenMP optional (Default OFF to keep core light)
+option(ENABLE_OPENMP "Enable OpenMP for benchmarks" OFF)
+
+if(ENABLE_OPENMP)
+    find_package(OpenMP)
+    if(NOT OpenMP_C_FOUND)
+        message(FATAL_ERROR "OpenMP requested but not found.")
+    endif()
+endif()
 
 # Check for Interprocedural Optimization (LTO)
 include(CheckIPOSupported)
 check_ipo_supported(RESULT supported OUTPUT error)
 
 # ==============================================================================
-# 2. CORE LIBRARY (mag_core)
+# 2. CORE LIBRARY (mag_mutex_lib)
 # ==============================================================================
-add_library(mag_core STATIC 
+add_library(mag_mutex_lib STATIC 
     src/mag_mutex.c
     src/mag_thread.c
 )
-target_include_directories(mag_core PUBLIC include)
-target_link_libraries(mag_core PRIVATE Threads::Threads)
+target_include_directories(mag_mutex_lib PUBLIC include)
+target_link_libraries(mag_mutex_lib PRIVATE Threads::Threads)
 
 # Compilation Flags
 if(CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
-    target_compile_options(mag_core PRIVATE 
+    target_compile_options(mag_mutex_lib PRIVATE 
         -Wall -Wextra -Wpedantic -Wshadow -Wcast-align 
         -Wstrict-prototypes -Wmissing-prototypes -Wimplicit-fallthrough
         -fno-stack-protector  # Required for Fiber stack swaps
     )
 
     if(NOT APPLE)
-        target_compile_options(mag_core PRIVATE -fno-plt)
+        target_compile_options(mag_mutex_lib PRIVATE -fno-plt)
     endif()
 
     if(CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang")
-        target_compile_options(mag_core PRIVATE 
+        target_compile_options(mag_mutex_lib PRIVATE 
             -Watomic-implicit-seq-cst -Wthread-safety -Werror=atomic-implicit-seq-cst
         )
         set(LTO_FLAG "-flto=thin")
@@ -64,36 +73,39 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
         set(LTO_FLAG "-flto=auto")
     endif()
 
-    target_compile_options(mag_core PRIVATE -O3 ${LTO_FLAG} -fomit-frame-pointer)
-    target_link_options(mag_core PRIVATE ${LTO_FLAG})
+    target_compile_options(mag_mutex_lib PRIVATE -O3 ${LTO_FLAG} -fomit-frame-pointer)
+    target_link_options(mag_mutex_lib PRIVATE ${LTO_FLAG})
 
     # Architecture Tuning
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
-        target_compile_options(mag_core PRIVATE -march=native)
+        target_compile_options(mag_mutex_lib PRIVATE -march=native)
     else()
-        target_compile_options(mag_core PRIVATE -mcpu=native)
+        target_compile_options(mag_mutex_lib PRIVATE -mcpu=native)
     endif()
 endif()
 
 if(supported)
-    set_property(TARGET mag_core PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+    set_property(TARGET mag_mutex_lib PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
 endif()
 
 # ==============================================================================
 # 3. TEST SUITE & BENCHMARKS
 # ==============================================================================
-# 1. Find all .c files in tests/
 file(GLOB TEST_SOURCES "tests/*.c")
 
-# 2. Loop ONCE to create targets
 foreach(test_source ${TEST_SOURCES})
     get_filename_component(test_name ${test_source} NAME_WE)
     
-    add_executable(${test_name} ${test_source})
-    target_link_libraries(${test_name} PRIVATE mag_core Threads::Threads)
-    target_include_directories(${test_name} PRIVATE tests) # For test_utils.h
+    # Check if this is an OpenMP test and if we have OpenMP enabled
+    if(test_name STREQUAL "bench_omp" AND NOT ENABLE_OPENMP)
+        message(STATUS "Skipping ${test_name} (OpenMP not enabled)")
+        continue() # Skip this iteration of the loop
+    endif()
     
-    # Special case: OpenMP Benchmark needs the OpenMP runtime linked
+    add_executable(${test_name} ${test_source})
+    target_link_libraries(${test_name} PRIVATE mag_mutex_lib Threads::Threads)
+    target_include_directories(${test_name} PRIVATE tests)
+    
     if(test_name STREQUAL "bench_omp")
         target_link_libraries(${test_name} PRIVATE OpenMP::OpenMP_C)
     endif()
@@ -107,7 +119,7 @@ endforeach()
 # 4. SANITIZERS (Toggleable Options)
 # ==============================================================================
 option(ENABLE_TSAN "Enable Thread Sanitizer" OFF)
-option(ENABLE_ASAN "Enable Address Sanitizer" OFF)
+option(ENABLE_ASAN "Enable Address Sanitizer" ON)
 
 if(ENABLE_TSAN)
     add_compile_options(-fsanitize=thread -g)
