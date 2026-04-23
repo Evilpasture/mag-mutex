@@ -1,6 +1,5 @@
 #define PY_SSIZE_T_CLEAN
 #include "mag_mutex.h"
-#include <Python.h> // Kept for CMake compatibility
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -11,7 +10,7 @@
 
 // --- Configurations for Deep Analysis ---
 static constexpr int TOTAL_TASKS = 1000000;
-static constexpr int NUM_TRIALS  = 5; // Run each config 5 times for variance
+static constexpr int NUM_TRIALS  = 5;                 // Run each config 5 times for variance
 static int THREAD_CONFIGS[]      = {2, 4, 8, 12, 16}; // Min 2 (1 Prod, 1 Cons)
 static int NUM_CONFIGS           = 5;
 
@@ -27,7 +26,7 @@ typedef struct {
     int type; // 0: Mag, 1: Pthread
     void *mtx;
     void *cv;
-    
+
     int total_tasks;
     int queue_count;
     bool done;
@@ -180,7 +179,7 @@ static void run_suite(int type, int threads, int trial_id) {
         targs[i].id     = i;
         pthread_create(&pts[i], nullptr, worker_func, &targs[i]);
     }
-    
+
     // Join Threads
     for (int i = 0; i < threads; i++) {
         pthread_join(pts[i], nullptr);
@@ -189,8 +188,7 @@ static void run_suite(int type, int threads, int trial_id) {
     // Output CSV rows: mutex,threads,trial,role,thread_id,items_processed,latency_ns
     for (int i = 0; i < threads; i++) {
         const char *role = (i == 0) ? "Producer" : "Consumer";
-        printf("%s,%d,%d,%s,%d,%d,%llu\n", 
-               labels[type], threads, trial_id, role, i, 
+        printf("%s,%d,%d,%s,%d,%d,%llu\n", labels[type], threads, trial_id, role, i,
                items_consumed[i], (unsigned long long)elapsed[i]);
     }
 
@@ -204,7 +202,6 @@ static void run_suite(int type, int threads, int trial_id) {
 }
 
 int main(void) {
-    Py_Initialize();
 
     // Standard CSV Header for R / Pandas parsing
     printf("mutex,threads,trial,role,thread_id,items_processed,latency_ns\n");
@@ -217,6 +214,5 @@ int main(void) {
         }
     }
 
-    Py_Finalize();
     return 0;
 }

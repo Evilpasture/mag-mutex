@@ -145,7 +145,7 @@ typedef struct MagMutex {
         MAG_ATOMIC(uint8_t) bits;
 #ifdef MAG_DEBUG
     MAG_ATOMIC(bool) has_owner;
-    MAG_ATOMIC(plat_thread_id_t) owner;
+    MAG_ATOMIC(uintptr_t) owner;
     MAG_ATOMIC(uint64_t) spin_success_count;
     MAG_ATOMIC(uint64_t) park_count;
 #endif

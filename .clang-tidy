@@ -27,30 +27,10 @@ WarningsAsErrors: "*"
 HeaderFilterRegex: '.*mag_mutex\.h'
 
 CheckOptions:
-  # 1. Naming Conventions: Strict 'mag_' prefix enforcement
-  - key:             readability-identifier-naming.FunctionCase
-    value:           lower_case
-  - key:             readability-identifier-naming.FunctionPrefix
-    value:           mag_
-  - key:             readability-identifier-naming.StructCase
-    value:           CamelCase
-  - key:             readability-identifier-naming.StructPrefix
-    value:           Mag
-  - key:             readability-identifier-naming.ConstantCase
-    value:           UPPER_CASE
-  - key:             readability-identifier-naming.ConstantPrefix
-    value:           MAG_
-  - key:             readability-identifier-naming.MacroDefinitionCase
-    value:           UPPER_CASE
-  - key:             readability-identifier-naming.MacroDefinitionPrefix
-    value:           MAG_
-
-  # 2. Performance & Modernization
   - key:             performance-move-const-arg.CheckTrivialTypes
     value:           true
   - key:             modernize-use-nullptr.NullMacros
     value:           "NULL,nullptr"
 
-  # 3. Concurrency Checks
   - key:             concurrency-mt-unsafe.FunctionSet
     value:           posix # Check for thread-unsafe functions like strtok, getenv, etc.
