@@ -4,7 +4,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 project(MagSync 
     VERSION 1.1.0 
-    LANGUAGES C
+    # Enable ASM along with C
+    LANGUAGES C ASM
 )
 
 # ==============================================================================
@@ -14,6 +15,7 @@ function(enforce_modern_compiler)
     if(CMAKE_GENERATOR MATCHES "Visual Studio")
         message(FATAL_ERROR "\n GENERATOR ERROR: Visual Studio/MSBuild is forbidden. Use Ninja.")
     endif()
+    # Ensure we are using a compiler that understands the .S + Preprocessor flow
     if(NOT CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
         message(FATAL_ERROR "\n COMPILER ERROR: MSVC is incapable of C23/Fiber switching.")
     endif()
@@ -28,9 +30,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # ==============================================================================
 find_package(Threads REQUIRED)
 
-# Make OpenMP optional (Default OFF to keep core light)
 option(ENABLE_OPENMP "Enable OpenMP for benchmarks" OFF)
-
 if(ENABLE_OPENMP)
     find_package(OpenMP)
     if(NOT OpenMP_C_FOUND)
@@ -38,7 +38,6 @@ if(ENABLE_OPENMP)
     endif()
 endif()
 
-# Check for Interprocedural Optimization (LTO)
 include(CheckIPOSupported)
 check_ipo_supported(RESULT supported OUTPUT error)
 
@@ -48,8 +47,12 @@ check_ipo_supported(RESULT supported OUTPUT error)
 add_library(mag_mutex_lib STATIC 
     src/mag_mutex.c
     src/mag_thread.c
+    src/mag_asm.S       # <--- Added the assembly file here
 )
-target_include_directories(mag_mutex_lib PUBLIC include)
+
+# Ensure the library can find mag_asm_defs.h 
+# (Assuming it is in include/ or src/)
+target_include_directories(mag_mutex_lib PUBLIC include PRIVATE src)
 target_link_libraries(mag_mutex_lib PRIVATE Threads::Threads)
 
 # Compilation Flags
@@ -57,8 +60,12 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
     target_compile_options(mag_mutex_lib PRIVATE 
         -Wall -Wextra -Wpedantic -Wshadow -Wcast-align 
         -Wstrict-prototypes -Wmissing-prototypes -Wimplicit-fallthrough
-        -fno-stack-protector  # Required for Fiber stack swaps
+        -fno-stack-protector
     )
+
+    # Some compilers need an explicit flag to tell them .S files are "assembler-with-cpp"
+    # though Clang/GCC usually do this by default for capital .S
+    set_source_files_properties(src/mag_asm.S PROPERTIES LANGUAGE ASM)
 
     if(NOT APPLE)
         target_compile_options(mag_mutex_lib PRIVATE -fno-plt)
@@ -76,7 +83,6 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
     target_compile_options(mag_mutex_lib PRIVATE -O3 ${LTO_FLAG} -fomit-frame-pointer)
     target_link_options(mag_mutex_lib PRIVATE ${LTO_FLAG})
 
-    # Architecture Tuning
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
         target_compile_options(mag_mutex_lib PRIVATE -march=native)
     else()
@@ -96,10 +102,8 @@ file(GLOB TEST_SOURCES "tests/*.c")
 foreach(test_source ${TEST_SOURCES})
     get_filename_component(test_name ${test_source} NAME_WE)
     
-    # Check if this is an OpenMP test and if we have OpenMP enabled
     if(test_name STREQUAL "bench_omp" AND NOT ENABLE_OPENMP)
-        message(STATUS "Skipping ${test_name} (OpenMP not enabled)")
-        continue() # Skip this iteration of the loop
+        continue()
     endif()
     
     add_executable(${test_name} ${test_source})
@@ -116,10 +120,13 @@ foreach(test_source ${TEST_SOURCES})
 endforeach()
 
 # ==============================================================================
-# 4. SANITIZERS (Toggleable Options)
+# 4. SANITIZERS
 # ==============================================================================
+# NOTE: Manual stack switching (Fibers) is incompatible with standard ASan/TSan
+# unless you use specific __sanitizer_start_switch_fiber / __sanitizer_finish_switch_fiber APIs.
+# Leaving these OFF by default for Fiber development.
 option(ENABLE_TSAN "Enable Thread Sanitizer" OFF)
-option(ENABLE_ASAN "Enable Address Sanitizer" ON)
+option(ENABLE_ASAN "Enable Address Sanitizer" OFF)
 
 if(ENABLE_TSAN)
     add_compile_options(-fsanitize=thread -g)
@@ -127,7 +134,6 @@ if(ENABLE_TSAN)
 endif()
 
 if(ENABLE_ASAN)
-    # Note: ASan requires fno-omit-frame-pointer for readable traces
     add_compile_options(-fsanitize=address -fno-omit-frame-pointer -g)
     add_link_options(-fsanitize=address)
 endif()
