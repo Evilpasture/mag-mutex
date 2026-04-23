@@ -1,7 +1,9 @@
 #include "mag_mutex.h"
 #include "mag_thread.h"
+//NOLINTBEGIN(llvmlibc-restrict-system-libc-headers)
 #include <stdlib.h>
 #include <time.h>
+//NOLINTEND(llvmlibc-restrict-system-libc-headers)
 
 static constexpr int MAX_SPIN_COUNT = 40;
 
@@ -146,28 +148,34 @@ void mag_debug_pre_unlock(MagMutex *mod) {
 #endif
 
 typedef struct Waiter Waiter;
+static constexpr size_t Waiter_Alignment = 64;
 struct Waiter {
+    alignas(Waiter_Alignment)
+    // 8-byte members grouped together
     const void *address;
-    plat_cnd_t cond;
     MagThread *fiber;
-    MAG_ATOMIC(bool) signaled;
     Waiter *next;
+    
+    // plat_cnd_t size varies by OS, but we keep it here
+    plat_cnd_t cond;
+
+    // 1-byte atomic at the end
+    MAG_ATOMIC(bool) signaled;
 };
 
 // Padded 128-byte cacheline bucket to completely eliminate false sharing.
+static constexpr size_t Bucket_Alignment = 128;
 typedef struct {
+    alignas(Bucket_Alignment)
     plat_mtx_t mutex;
     Waiter *head;
-    uint8_t __pad[128 - (sizeof(plat_mtx_t) + sizeof(void *))];
+    uint8_t _pad[Bucket_Alignment - (sizeof(plat_mtx_t) + sizeof(void *))];
 } Bucket;
 
-#if defined(_MSC_VER)
-__declspec(align(128)) static Bucket parking_lot[BUCKET_COUNT];
-#else
-static Bucket parking_lot[BUCKET_COUNT] __attribute__((aligned(128)));
-#endif
 
-static_assert(sizeof(Bucket) == 128, "Bucket must be exactly 128 bytes!");
+alignas(Bucket_Alignment) static Bucket parking_lot[BUCKET_COUNT];
+
+static_assert(sizeof(Bucket) == Bucket_Alignment, "Bucket must be exactly 128 bytes!");
 
 [[gnu::constructor]]
 static void init_parking_lot() {

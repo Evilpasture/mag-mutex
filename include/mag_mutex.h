@@ -28,6 +28,8 @@
  * the struct grows to include ownership and diagnostic metadata.
  */
 
+
+// NOLINTBEGIN(llvmlibc-restrict-system-libc-headers)
 #include <assert.h>
 #ifdef __cplusplus
 #    include <atomic>
@@ -124,6 +126,8 @@ typedef pthread_t plat_thread_id_t;
 #    define MAG_LOCK_ORDER memory_order_acquire
 #    define MAG_UNLOCK_ORDER memory_order_release
 #endif
+// NOLINTEND(llvmlibc-restrict-system-libc-headers)
+
 
 // --- MagMutex States ---
 
