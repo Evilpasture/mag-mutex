@@ -118,39 +118,51 @@ MagThread *MagThread_Create(size_t stack_size, MagThreadFunc func, void *arg) {
 #endif
 
     uintptr_t stack_pointer = (uintptr_t)thread;
-
-    // ABI Specifics
-    constexpr size_t GPR_SIZE          = 8ULL;
-    constexpr size_t WIN64_XMM_STORAGE = 160ULL;
-    constexpr size_t WIN64_GPR_STORAGE = 64ULL;
-    constexpr size_t WIN64_CONTEXT_SZ  = WIN64_XMM_STORAGE + WIN64_GPR_STORAGE;
-
-    [[maybe_unused]] constexpr size_t SYSV_GPR_STORAGE  = 48ULL; // 6 registers (rbx, rbp, r12-r15)
-    [[maybe_unused]] constexpr size_t ARM64_CONTEXT_SZ  = 160ULL;
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers, readability-magic-numbers)
+    static_assert(alignof(MagThread) % 16 == 0, 
+    "MagThread struct alignment must be a multiple of 16 to ensure the stack starts aligned");
 
 #if defined(_WIN32) && (defined(__x86_64__) || defined(_M_X64))
-    // Windows x64: Shadow space, XMM registers, and specific GPRs
+    // Symmetry: 8 (Ret) + 8 (Dummy) + 64 (GPR) + 160 (XMM) = 240
+    constexpr size_t WIN64_CTX_SZ = 232ULL; // Everything except the Ret addr
+    constexpr size_t WIN64_RET_SZ = 8ULL;
+    constexpr size_t WIN64_TOTAL  = WIN64_CTX_SZ + WIN64_RET_SZ; // 240
+
+    // Using the constants defined in the previous working block:
+    // NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers, readability-magic-numbers)
+    static_assert(WIN64_TOTAL % 16 == 0, 
+        "Windows x64 total stack frame must be a multiple of 16 for movaps alignment");
+    
+    static_assert(WIN64_TOTAL == 240, 
+        "Windows x64 stack frame size changed; check mag_asm.S synchronization");
+        
+    static_assert((WIN64_CTX_SZ + 8) == WIN64_TOTAL,
+        "Windows x64 Context + Return Address mismatch");
+    // NOLINTEND(cppcoreguidelines-avoid-magic-numbers, readability-magic-numbers)
+
     void *dest_ptr = nullptr;
     uintptr_t val_to_write = 0;
 
-    // 1. Set dummy return address (RIP) for alignment
-    stack_pointer -= GPR_SIZE;
-    val_to_write = 0;
-    memcpy((void*)&dest_ptr, &stack_pointer, sizeof(void *));
-    memcpy(dest_ptr, &val_to_write, GPR_SIZE);
+    // 1. Align stack pointer (thread starts 16-aligned)
+    // 0x...00 - 240 (0xF0) = 0x...10 (Still 16-aligned!)
+    stack_pointer -= WIN64_TOTAL;
 
-    // 2. Set the actual entry point (Trampoline)
-    stack_pointer -= GPR_SIZE;
+    // 2. The 'ret' in mag_switch happens after 'add 160' and 'pop 9' (160+72=232)
+    uintptr_t ret_addr_loc = stack_pointer + WIN64_CTX_SZ;
     val_to_write = (uintptr_t)mag_trampoline_asm;
-    memcpy((void*)&dest_ptr, &stack_pointer, sizeof(void *));
-    memcpy(dest_ptr, &val_to_write, GPR_SIZE);
+    memcpy((void*)&dest_ptr, &ret_addr_loc, sizeof(void *));
+    memcpy(dest_ptr, &val_to_write, sizeof(uintptr_t));
 
-    // 3. Reserve and zero space for XMM6-XMM15 and RDI, RSI, RBX, RBP, R12-R15
-    stack_pointer -= WIN64_CONTEXT_SZ;
+    // 3. Zero the context
     memcpy((void*)&dest_ptr, &stack_pointer, sizeof(void *));
-    memset(dest_ptr, 0, WIN64_CONTEXT_SZ);
+    memset(dest_ptr, 0, WIN64_CTX_SZ);
 
+    // Save the pointer
+    memcpy((void *)&thread->stack_pointer, &stack_pointer, sizeof(void *));
 #elif defined(__x86_64__) || defined(_M_X64)
+    [[maybe_unused]] constexpr size_t SYSV_GPR_STORAGE  = 48ULL; // 6 registers (rbx, rbp, r12-r15)
+    
+    static_assert(SYSV_GPR_STORAGE % 8 == 0, "System V GPR storage must be 8-byte multiples");
     // System V ABI (Linux/macOS): Only 6 GPRs are callee-saved
     void *dest_ptr;
     uintptr_t val_to_write;
@@ -167,6 +179,7 @@ MagThread *MagThread_Create(size_t stack_size, MagThreadFunc func, void *arg) {
     memset(dest_ptr, 0, SYSV_GPR_STORAGE);
 
 #elif defined(__aarch64__) || defined(_M_ARM64)
+    [[maybe_unused]] constexpr size_t ARM64_CONTEXT_SZ  = 160ULL;
     // ARM64: Save area for X19-X30 and D8-D15
     void *dest_ptr;
     uintptr_t val_to_write;

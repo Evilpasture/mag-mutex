@@ -47,7 +47,7 @@ check_ipo_supported(RESULT supported OUTPUT error)
 add_library(mag_mutex_lib STATIC 
     src/mag_mutex.c
     src/mag_thread.c
-    src/mag_asm.S       # <--- Added the assembly file here
+    src/mag_asm.S
 )
 
 # Ensure the library can find mag_asm_defs.h 
@@ -82,6 +82,17 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
 
     target_compile_options(mag_mutex_lib PRIVATE -O3 ${LTO_FLAG} -fomit-frame-pointer)
     target_link_options(mag_mutex_lib PRIVATE ${LTO_FLAG})
+
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+        # -g: Generate debug info
+        # -gdwarf: Force DWARF format instead of CodeView (PDB)
+        # -gcolumn-info: Helps GDB point to the exact character in the line
+        target_compile_options(mag_mutex_lib PRIVATE -g -gdwarf -gcolumn-info)
+        
+        # If you are using lld (the Clang linker), you might need to tell it 
+        # not to strip the DWARF sections during the link phase.
+        target_link_options(mag_mutex_lib PRIVATE -Wl,-g)
+    endif()
 
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
         target_compile_options(mag_mutex_lib PRIVATE -march=native)
