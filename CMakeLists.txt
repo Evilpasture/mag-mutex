@@ -99,6 +99,11 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
         target_link_options(mag_mutex_lib PRIVATE -Wl,-g)
     endif()
 
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        # This prevents GCC from being too aggressive with hidden symbols in .a files
+        target_compile_options(mag_mutex_lib PRIVATE -fvisibility=default)
+    endif()
+
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
         target_compile_options(mag_mutex_lib PRIVATE -march=native)
     else()
@@ -115,6 +120,11 @@ endif()
 
 if(supported)
     set_property(TARGET mag_mutex_lib PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+endif()
+if(supported AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    # For GCC, sometimes "auto" LTO is too aggressive for static libs
+    # Switching to fat-lto-objects ensures the symbols are visible to the linker
+    target_compile_options(mag_mutex_lib PRIVATE -ffat-lto-objects)
 endif()
 
 # ==============================================================================
