@@ -26,7 +26,7 @@ set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED OFF)
 
 # ==============================================================================
-# 1. DEPENDENCIES & FEATURE DETECTION
+# 1. DEPENDENCIES & LLD WORKAROUND
 # ==============================================================================
 find_package(Threads REQUIRED)
 
@@ -38,8 +38,20 @@ if(ENABLE_OPENMP)
     endif()
 endif()
 
+# CRITICAL FIX: If the environment forces LDFLAGS=-fuse-ld=lld, GCC's LTO will break.
+# We MUST force fat objects and reset the linker to BFD *before* checking IPO support,
+# otherwise CMake's internal test will fail and disable LTO entirely.
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    message(STATUS "MagSync: GCC detected. Forcing -ffat-lto-objects and BFD linker to prevent LLD conflicts.")
+    add_compile_options("-ffat-lto-objects")
+    add_link_options("-fuse-ld=bfd")
+endif()
+
 include(CheckIPOSupported)
 check_ipo_supported(RESULT supported OUTPUT error)
+if(NOT supported)
+    message(WARNING "IPO/LTO not supported: ${error}")
+endif()
 
 # ==============================================================================
 # 2. CORE LIBRARY (mag_mutex_lib)
@@ -51,7 +63,6 @@ add_library(mag_mutex_lib STATIC
 )
 
 # Ensure the library can find mag_asm_defs.h 
-# (Assuming it is in include/ or src/)
 target_include_directories(mag_mutex_lib 
     PUBLIC include 
     PRIVATE src
@@ -60,14 +71,14 @@ target_link_libraries(mag_mutex_lib PRIVATE Threads::Threads)
 
 # Compilation Flags
 if(CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
+    
+    # Note: Removed manual -flto=xxx flags. We rely 100% on CMake's IPO property now.
     target_compile_options(mag_mutex_lib PRIVATE 
         -Wall -Wextra -Wpedantic -Wshadow -Wcast-align 
         -Wstrict-prototypes -Wmissing-prototypes -Wimplicit-fallthrough
-        -fno-stack-protector
+        -O3 -fomit-frame-pointer -fno-stack-protector
     )
 
-    # Some compilers need an explicit flag to tell them .S files are "assembler-with-cpp"
-    # though Clang/GCC usually do this by default for capital .S
     set_source_files_properties(src/mag_asm.S PROPERTIES LANGUAGE ASM)
 
     if(NOT APPLE)
@@ -78,34 +89,14 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
         target_compile_options(mag_mutex_lib PRIVATE 
             -Watomic-implicit-seq-cst -Wthread-safety -Werror=atomic-implicit-seq-cst
         )
-        set(LTO_FLAG "-flto=thin")
-    else()
-        set(LTO_FLAG "-flto=auto")
     endif()
 
-    target_compile_options(mag_mutex_lib PRIVATE -O3 ${LTO_FLAG} -fomit-frame-pointer)
     target_compile_options(mag_mutex_lib INTERFACE -fno-stack-protector)
 
-    set_source_files_properties(src/mag_asm.S PROPERTIES LANGUAGE ASM)
-
     if(CMAKE_C_COMPILER_ID MATCHES "Clang")
-        # -g: Generate debug info
-        # -gdwarf: Force DWARF format instead of CodeView (PDB)
-        # -gcolumn-info: Helps GDB point to the exact character in the line
+        # -g: Generate debug info, Force DWARF format instead of CodeView (PDB)
         target_compile_options(mag_mutex_lib PRIVATE -g -gdwarf -gcolumn-info)
-        
-        # If you are using lld (the Clang linker), you might need to tell it 
-        # not to strip the DWARF sections during the link phase.
         target_link_options(mag_mutex_lib PRIVATE -Wl,-g)
-    endif()
-
-    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-        # Ensure GCC produces standard object code alongside LTO bytecode
-        add_compile_options(-ffat-lto-objects)
-        
-        # Increase visibility for the static library's public API
-        # so the test executables can see the symbols
-        target_compile_options(mag_mutex_lib PRIVATE -fvisibility=default)
     endif()
 
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
@@ -122,13 +113,9 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
     endif()
 endif()
 
+# Apply the CMake native LTO. This safely triggers gcc-ar/gcc-ranlib under the hood.
 if(supported)
     set_property(TARGET mag_mutex_lib PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
-endif()
-if(supported AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
-    # For GCC, sometimes "auto" LTO is too aggressive for static libs
-    # Switching to fat-lto-objects ensures the symbols are visible to the linker
-    target_compile_options(mag_mutex_lib PRIVATE -ffat-lto-objects)
 endif()
 
 # ==============================================================================
@@ -160,9 +147,6 @@ endforeach()
 # ==============================================================================
 # 4. SANITIZERS
 # ==============================================================================
-# NOTE: Manual stack switching (Fibers) is incompatible with standard ASan/TSan
-# unless you use specific __sanitizer_start_switch_fiber / __sanitizer_finish_switch_fiber APIs.
-# Leaving these OFF by default for Fiber development.
 option(ENABLE_TSAN "Enable Thread Sanitizer" OFF)
 option(ENABLE_ASAN "Enable Address Sanitizer" OFF)
 
