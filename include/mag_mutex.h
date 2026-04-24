@@ -70,8 +70,8 @@ using std::memory_order_release;
 #    define MAG_ASSUME(x) (x)
 #endif
 
-#if defined(MAG_EXPORT_INTERNAL) || !defined(__GNUC__)
-#    define MAG_INTERNAL
+#if defined(MAG_EXPORT_INTERNAL) || !defined(__GNUC__) || defined(MAG_BUILDING_TESTS)
+#    define MAG_INTERNAL [[gnu::visibility("default")]]
 #else
 #    define MAG_INTERNAL [[gnu::visibility("hidden")]]
 #endif
@@ -174,12 +174,12 @@ static inline void mag_debug_pre_unlock(MagMutex *mod) { (void)mod; }
 static inline void mag_debug_clear_owner(MagMutex *mod) { (void)mod; }
 #endif
 
-[[gnu::cold, gnu::noinline, gnu::nonnull(1)]]
-// NOLINTNEXTLINE(readability-identifier-naming)
-void MagMutex_LockSlow(MagMutex *mod);
-[[gnu::cold, gnu::noinline, gnu::nonnull(1)]]
-// NOLINTNEXTLINE(readability-identifier-naming)
-void MagMutex_UnlockSlow(MagMutex *mod);
+[[gnu::cold, gnu::noinline, gnu::nonnull(1)]] MAG_INTERNAL
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    void MagMutex_LockSlow(MagMutex *mod);
+[[gnu::cold, gnu::noinline, gnu::nonnull(1)]] MAG_INTERNAL
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    void MagMutex_UnlockSlow(MagMutex *mod);
 
 // --- Public API ---
 
