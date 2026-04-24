@@ -52,7 +52,10 @@ add_library(mag_mutex_lib STATIC
 
 # Ensure the library can find mag_asm_defs.h 
 # (Assuming it is in include/ or src/)
-target_include_directories(mag_mutex_lib PUBLIC include PRIVATE src)
+target_include_directories(mag_mutex_lib 
+    PUBLIC include 
+    PRIVATE src
+)
 target_link_libraries(mag_mutex_lib PRIVATE Threads::Threads)
 
 # Compilation Flags
@@ -81,7 +84,9 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
     endif()
 
     target_compile_options(mag_mutex_lib PRIVATE -O3 ${LTO_FLAG} -fomit-frame-pointer)
-    target_link_options(mag_mutex_lib PRIVATE ${LTO_FLAG})
+    target_compile_options(mag_mutex_lib INTERFACE -fno-stack-protector)
+
+    set_source_files_properties(src/mag_asm.S PROPERTIES LANGUAGE ASM)
 
     if(CMAKE_C_COMPILER_ID MATCHES "Clang")
         # -g: Generate debug info
