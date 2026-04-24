@@ -28,7 +28,6 @@
  * the struct grows to include ownership and diagnostic metadata.
  */
 
-
 // NOLINTBEGIN(llvmlibc-restrict-system-libc-headers)
 #include <assert.h>
 #ifdef __cplusplus
@@ -70,6 +69,13 @@ using std::memory_order_release;
 #    define MAG_ALWAYS_INLINE
 #    define MAG_ASSUME(x) (x)
 #endif
+
+#if defined(MAG_EXPORT_INTERNAL) || !defined(__GNUC__)
+#    define MAG_INTERNAL
+#else
+#    define MAG_INTERNAL [[gnu::visibility("hidden")]]
+#endif
+
 // NOLINTBEGIN(readability-identifier-naming)
 #if defined(_WIN32)
 #    ifndef WIN32_LEAN_AND_MEAN
@@ -128,7 +134,6 @@ typedef pthread_t plat_thread_id_t;
 #endif
 // NOLINTEND(llvmlibc-restrict-system-libc-headers)
 
-
 // --- MagMutex States ---
 
 constexpr uint8_t MAG_UNLOCKED    = 0x00;
@@ -169,10 +174,10 @@ static inline void mag_debug_pre_unlock(MagMutex *mod) { (void)mod; }
 static inline void mag_debug_clear_owner(MagMutex *mod) { (void)mod; }
 #endif
 
-[[gnu::cold, gnu::noinline, gnu::visibility("hidden"), gnu::nonnull(1)]]
+[[gnu::cold, gnu::noinline, gnu::nonnull(1)]]
 // NOLINTNEXTLINE(readability-identifier-naming)
 void MagMutex_LockSlow(MagMutex *mod);
-[[gnu::cold, gnu::noinline, gnu::visibility("hidden"), gnu::nonnull(1)]]
+[[gnu::cold, gnu::noinline, gnu::nonnull(1)]]
 // NOLINTNEXTLINE(readability-identifier-naming)
 void MagMutex_UnlockSlow(MagMutex *mod);
 

@@ -200,8 +200,7 @@ static inline size_t hash_address(const void *addr) {
     return (size_t)(hash_val % BUCKET_COUNT);
 }
 
-[[gnu::cold, gnu::noinline, gnu::visibility("hidden"), gnu::nonnull(1)]]
-void MagMutex_LockSlow(MagMutex *mod) {
+[[gnu::cold, gnu::noinline, gnu::nonnull(1)]] void MagMutex_LockSlow(MagMutex *mod) {
     size_t hash    = hash_address(mod);
     Bucket *bucket = &parking_lot[hash];
 
@@ -313,8 +312,7 @@ void MagMutex_LockSlow(MagMutex *mod) {
     }
 }
 
-[[gnu::cold, gnu::noinline, gnu::visibility("hidden"), gnu::nonnull(1)]]
-void MagMutex_UnlockSlow(MagMutex *mod) {
+[[gnu::cold, gnu::noinline, gnu::nonnull(1)]] void MagMutex_UnlockSlow(MagMutex *mod) {
     uint8_t val = atomic_load_explicit(&mod->bits, memory_order_relaxed);
     for (;;) {
         uint8_t desired = val & ~MAG_LOCKED;
