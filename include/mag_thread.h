@@ -1,7 +1,6 @@
 #pragma once
 // NOLINTBEGIN(llvmlibc-restrict-system-libc-headers)
 #include <stddef.h>
-#include <stdint.h>
 // NOLINTEND(llvmlibc-restrict-system-libc-headers)
 
 // Note: In C23, bool, true, and false are native keywords. No <stdbool.h> needed.
@@ -12,16 +11,15 @@ typedef void (*MagThreadFunc)(void *arg);
 typedef struct MagThread MagThread;
 static constexpr size_t MagThread_Alignment = 128;
 struct MagThread {
-    alignas(MagThread_Alignment)
-    void* stack_pointer;
-    void* map_addr;
+    alignas(MagThread_Alignment) void *stack_pointer;
+    void *map_addr;
     size_t map_size;
     MagThreadFunc func;
-    void* arg;
-    MagThread* caller;
+    void *arg;
+    MagThread *caller;
 #if defined(_WIN32)
-    void* stack_base;
-    void* stack_limit;
+    void *stack_base;
+    void *stack_limit;
 #endif
     bool is_finished;
     bool is_main;
