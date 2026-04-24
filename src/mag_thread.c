@@ -1,6 +1,7 @@
 #include "mag_thread.h"
 // NOLINTBEGIN(llvmlibc-restrict-system-libc-headers)
 #include <stddef.h>
+#include <stdint.h> // For uintptr_t
 #include <stdlib.h>
 #include <string.h>
 
