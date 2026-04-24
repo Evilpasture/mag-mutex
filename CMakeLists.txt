@@ -23,7 +23,7 @@ endfunction()
 enforce_modern_compiler()
 
 set(CMAKE_C_STANDARD 23)
-set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_STANDARD_REQUIRED OFF)
 
 # ==============================================================================
 # 1. DEPENDENCIES & FEATURE DETECTION
@@ -103,6 +103,13 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
         target_compile_options(mag_mutex_lib PRIVATE -march=native)
     else()
         target_compile_options(mag_mutex_lib PRIVATE -mcpu=native)
+    endif()
+
+    if(MSVC AND CMAKE_C_COMPILER_ID MATCHES "Clang")
+        target_compile_options(mag_mutex_lib PRIVATE 
+            "/clang:-std=c23"
+            "-Wno-c23-extensions"
+        )
     endif()
 endif()
 

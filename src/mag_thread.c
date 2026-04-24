@@ -123,9 +123,9 @@ MagThread *MagThread_Create(size_t stack_size, MagThreadFunc func, void *arg) {
     static_assert(
         alignof(MagThread) % 16 == 0,
         "MagThread struct alignment must be a multiple of 16 to ensure the stack starts aligned");
-
+    constexpr size_t GPR_SIZE = 8ULL; // Each general-purpose register is 8 bytes
 #if defined(_WIN32) && (defined(__x86_64__) || defined(_M_X64))
-    // Symmetry: 8 (Ret) + 8 (Dummy) + 64 (GPR) + 160 (XMM) = 240
+                                      // Symmetry: 8 (Ret) + 8 (Dummy) + 64 (GPR) + 160 (XMM) = 240
     constexpr size_t WIN64_CTX_SZ = 232ULL; // Everything except the Ret addr
     constexpr size_t WIN64_RET_SZ = 8ULL;
     constexpr size_t WIN64_TOTAL  = WIN64_CTX_SZ + WIN64_RET_SZ; // 240
@@ -182,7 +182,6 @@ MagThread *MagThread_Create(size_t stack_size, MagThreadFunc func, void *arg) {
 
 #elif defined(__aarch64__) || defined(_M_ARM64)
     [[maybe_unused]] constexpr size_t ARM64_CONTEXT_SZ = 160ULL;
-    constexpr size_t GPR_SIZE = 8ULL; // Each general-purpose register is 8 bytes
     // ARM64: Save area for X19-X30 and D8-D15
     void *dest_ptr;
     uintptr_t val_to_write;
