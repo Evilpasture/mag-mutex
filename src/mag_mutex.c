@@ -1,6 +1,9 @@
 #include "mag_mutex.h"
+#include "mag_thread.h"
+// NOLINTBEGIN(llvmlibc-restrict-system-libc-headers)
 #include <stdlib.h>
 #include <time.h>
+// NOLINTEND(llvmlibc-restrict-system-libc-headers)
 
 static constexpr int MAX_SPIN_COUNT = 40;
 
@@ -31,15 +34,25 @@ static struct {
     const MagMutex *from;
     const MagMutex *to;
 } lock_edges[MAX_DEBUG_EDGES];
-static int num_lock_edges = 0;
+static size_t num_lock_edges = 0;
 
 static thread_local const MagMutex *held_locks[MAX_HELD_LOCKS];
-static thread_local int held_locks_count = 0;
+static thread_local size_t held_locks_count = 0;
+
+static inline uintptr_t mag_get_current_id(void) {
+    MagThread *fiber = MagThread_GetCurrent();
+    // If we are in a fiber context, the fiber pointer is our unique ID.
+    if (fiber) {
+        return (uintptr_t)fiber;
+    }
+    // Fallback for raw OS threads not managed by MagThread
+    return (uintptr_t)PLAT_CURRENT_THREAD();
+}
 
 static bool dfs_check_cycle(const MagMutex *current, const MagMutex *target) {
     if (current == target)
         return true;
-    for (int i = 0; i < num_lock_edges; i++) {
+    for (size_t i = 0; i < num_lock_edges; i++) {
         if (lock_edges[i].from == current) {
             if (dfs_check_cycle(lock_edges[i].to, target))
                 return true;
@@ -51,7 +64,7 @@ static bool dfs_check_cycle(const MagMutex *current, const MagMutex *target) {
 static void add_lock_edge(const MagMutex *from, const MagMutex *to) {
     PLAT_MTX_LOCK(&debug_graph_mutex);
 
-    for (int i = 0; i < num_lock_edges; i++) {
+    for (size_t i = 0; i < num_lock_edges; i++) {
         if (lock_edges[i].from == from && lock_edges[i].to == to) {
             PLAT_MTX_UNLOCK(&debug_graph_mutex);
             return;
@@ -85,9 +98,10 @@ void mag_debug_check_pre_lock(MagMutex *mod) {
 
     if (bits & MAG_LOCKED) {
         if (atomic_load_explicit(&mod->has_owner, memory_order_acquire)) {
-            plat_thread_id_t current = PLAT_CURRENT_THREAD();
-            plat_thread_id_t owner   = atomic_load_explicit(&mod->owner, memory_order_relaxed);
-            if (PLAT_THREADS_EQUAL(owner, current)) {
+            uintptr_t current = mag_get_current_id(); // <--- Fiber-aware ID
+            uintptr_t owner   = atomic_load_explicit(&mod->owner, memory_order_relaxed);
+
+            if (current == owner) {
                 assert(false && "DEADLOCK DETECTED: Recursive locking!");
                 abort();
             }
@@ -96,10 +110,10 @@ void mag_debug_check_pre_lock(MagMutex *mod) {
 }
 
 void mag_debug_post_lock(MagMutex *mod) {
-    atomic_store_explicit(&mod->owner, PLAT_CURRENT_THREAD(), memory_order_relaxed);
+    atomic_store_explicit(&mod->owner, mag_get_current_id(), memory_order_relaxed);
     atomic_store_explicit(&mod->has_owner, true, memory_order_release);
 
-    for (int i = 0; i < held_locks_count; i++) {
+    for (size_t i = 0; i < held_locks_count; i++) {
         add_lock_edge(held_locks[i], mod);
     }
     if (held_locks_count < MAX_HELD_LOCKS) {
@@ -113,17 +127,17 @@ void mag_debug_pre_unlock(MagMutex *mod) {
         abort();
     }
 
-    plat_thread_id_t current = PLAT_CURRENT_THREAD();
-    plat_thread_id_t owner   = atomic_load_explicit(&mod->owner, memory_order_relaxed);
+    uintptr_t current = mag_get_current_id(); // <--- Fiber-aware ID
+    uintptr_t owner   = atomic_load_explicit(&mod->owner, memory_order_relaxed);
 
-    if (!PLAT_THREADS_EQUAL(owner, current)) {
+    if (current != owner) {
         assert(false && "FATAL: Unlocking a mutex owned by another thread!");
         abort();
     }
 
-    for (int i = held_locks_count - 1; i >= 0; i--) {
+    for (size_t i = held_locks_count - 1; i < held_locks_count; i--) {
         if (held_locks[i] == mod) {
-            for (int j = i; j < held_locks_count - 1; j++) {
+            for (size_t j = i; j < held_locks_count - 1; j++) {
                 held_locks[j] = held_locks[j + 1];
             }
             held_locks_count--;
@@ -134,30 +148,37 @@ void mag_debug_pre_unlock(MagMutex *mod) {
 #endif
 
 typedef struct Waiter Waiter;
+static constexpr size_t Waiter_Alignment = 64;
 struct Waiter {
-    const void *address;
-    plat_cnd_t cond;
-    MAG_ATOMIC(bool) signaled;
+    alignas(Waiter_Alignment)
+        // 8-byte members grouped together
+        const void *address;
+    MagThread *fiber;
     Waiter *next;
+
+    // plat_cnd_t size varies by OS, but we keep it here
+    plat_cnd_t cond;
+
+    // 1-byte atomic at the end
+    MAG_ATOMIC(bool) signaled;
 };
 
 // Padded 128-byte cacheline bucket to completely eliminate false sharing.
+static constexpr size_t Bucket_Alignment = 128;
 typedef struct {
-    plat_mtx_t mutex;
+    alignas(Bucket_Alignment) plat_mtx_t mutex;
     Waiter *head;
-    uint8_t __pad[128 - (sizeof(plat_mtx_t) + sizeof(void *))];
+    uint8_t _pad[Bucket_Alignment - (sizeof(plat_mtx_t) + sizeof(void *))];
 } Bucket;
 
-#if defined(_MSC_VER)
-__declspec(align(128)) static Bucket parking_lot[BUCKET_COUNT];
-#else
-static Bucket parking_lot[BUCKET_COUNT] __attribute__((aligned(128)));
-#endif
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+alignas(Bucket_Alignment) static Bucket parking_lot[BUCKET_COUNT];
 
-static_assert(sizeof(Bucket) == 128, "Bucket must be exactly 128 bytes!");
+static_assert(sizeof(Bucket) == Bucket_Alignment, "Bucket must be exactly 128 bytes!");
 
 [[gnu::constructor]]
 static void init_parking_lot() {
+#pragma unroll 4
     for (size_t i = 0; i < BUCKET_COUNT; i++) {
         PLAT_MTX_INIT(&parking_lot[i].mutex);
         parking_lot[i].head = nullptr;
@@ -165,11 +186,18 @@ static void init_parking_lot() {
 }
 
 static inline size_t hash_address(const void *addr) {
-    uintptr_t x = (uintptr_t)addr;
-    x ^= x >> 33;
-    x *= 0xff51afd7ed558ccdULL;
-    x ^= x >> 33;
-    return x % BUCKET_COUNT;
+    // MurmurHash3 constants for 64-bit finalizer
+    constexpr uint64_t MURMUR_MIXER         = 0xff51afd7ed558ccdULL;
+    constexpr unsigned int MURMUR_BIT_SHIFT = 33U;
+
+    uint64_t hash_val = (uintptr_t)addr;
+
+    // Standard MurmurHash3 64-bit mixer logic
+    hash_val ^= hash_val >> MURMUR_BIT_SHIFT;
+    hash_val *= MURMUR_MIXER;
+    hash_val ^= hash_val >> MURMUR_BIT_SHIFT;
+
+    return (size_t)(hash_val % BUCKET_COUNT);
 }
 
 [[gnu::cold, gnu::noinline, gnu::visibility("hidden"), gnu::nonnull(1)]]
@@ -180,14 +208,14 @@ void MagMutex_LockSlow(MagMutex *mod) {
     // --- PHASE 1: Adaptive Exponential Backoff Spin ---
     // We increase the number of Mag_CPURelax() calls per iteration.
     // On ARM64/Apple Silicon, 'yield' is very cheap, so we need a significant count.
-    int backoff_limit = 1;
+    size_t backoff_limit = 1;
 
     for (int i = 0; i < MAX_SPIN_COUNT; i++) {
-        uint8_t v = atomic_load_explicit(&mod->bits, memory_order_relaxed);
+        uint8_t val = atomic_load_explicit(&mod->bits, memory_order_relaxed);
 
         // If the lock appears free, try to grab it.
-        if (!(v & MAG_LOCKED)) {
-            if (atomic_compare_exchange_weak_explicit(&mod->bits, &v, v | MAG_LOCKED,
+        if (!(val & MAG_LOCKED)) {
+            if (atomic_compare_exchange_weak_explicit(&mod->bits, &val, val | MAG_LOCKED,
                                                       memory_order_acquire, memory_order_relaxed)) {
                 mag_debug_post_lock(mod);
 #ifdef MAG_DEBUG
@@ -197,27 +225,28 @@ void MagMutex_LockSlow(MagMutex *mod) {
             }
         }
 
-        if (MAG_UNLIKELY(v & MAG_POISONED))
+        if (MAG_UNLIKELY(val & MAG_POISONED)) {
             return;
+        }
 
         // Perform the exponential backoff
-        for (int j = 0; j < backoff_limit; j++) {
+        for (size_t j = 0; j < backoff_limit; j++) {
             Mag_CPURelax();
         }
 
         // Cap the backoff to prevent excessive spinning if the lock is held long-term
         if (backoff_limit < 1024) {
-            backoff_limit <<= 1;
+            backoff_limit <<= 1U;
         }
     }
 
     // --- PHASE 2: Parking ---
     for (;;) {
-        uint8_t v = atomic_load_explicit(&mod->bits, memory_order_relaxed);
+        uint8_t val = atomic_load_explicit(&mod->bits, memory_order_relaxed);
 
         // Final attempt to snatch the lock (Lock Stealing)
-        if (!(v & MAG_LOCKED)) {
-            if (atomic_compare_exchange_weak_explicit(&mod->bits, &v, v | MAG_LOCKED,
+        if (!(val & MAG_LOCKED)) {
+            if (atomic_compare_exchange_weak_explicit(&mod->bits, &val, val | MAG_LOCKED,
                                                       memory_order_acquire, memory_order_relaxed)) {
                 mag_debug_post_lock(mod);
                 return;
@@ -226,60 +255,74 @@ void MagMutex_LockSlow(MagMutex *mod) {
         }
 
         // Ensure the MAG_HAS_WAITERS bit is set before we actually sleep.
-        if (!(v & MAG_HAS_WAITERS)) {
-            if (!atomic_compare_exchange_weak_explicit(&mod->bits, &v, v | MAG_HAS_WAITERS,
-                                                       memory_order_relaxed, memory_order_relaxed))
+        if (!(val & MAG_HAS_WAITERS)) {
+            if (!atomic_compare_exchange_weak_explicit(&mod->bits, &val, val | MAG_HAS_WAITERS,
+                                                       memory_order_relaxed,
+                                                       memory_order_relaxed)) {
                 continue;
+            }
         }
 
 #ifdef MAG_DEBUG
         atomic_fetch_add_explicit(&mod->park_count, 1, memory_order_relaxed);
 #endif
 
-        Waiter node = {.address = mod, .next = nullptr};
+        MagThread *current_thread = MagThread_GetCurrent();
+        bool is_fiber             = (bool)(current_thread != nullptr && !current_thread->is_main);
+
+        Waiter node = {
+            .address = mod, .next = nullptr, .fiber = (int)is_fiber ? current_thread : nullptr};
         atomic_init(&node.signaled, false);
-        PLAT_CND_INIT(&node.cond);
 
-        // Acquire the bucket mutex to protect the parking lot list
-        PLAT_MTX_LOCK(&bucket->mutex);
-
-        // RE-CHECK LOCK STATE (The "Gatekeeper" Pattern)
-        // This prevents the lost-wakeup race where the lock is released
-        // between the initial check and the PLAT_MTX_LOCK.
-        v = atomic_load_explicit(&mod->bits, memory_order_relaxed);
-        if (MAG_UNLIKELY(!(v & MAG_LOCKED) || !(v & MAG_HAS_WAITERS))) {
-            PLAT_MTX_UNLOCK(&bucket->mutex);
-            PLAT_CND_DESTROY(&node.cond);
-            continue; // Go back and try to grab the lock in userspace
+        if (!is_fiber) {
+            PLAT_CND_INIT(&node.cond); // Only init OS condvar for OS threads
         }
 
-        // Enqueue our waiter node
+        PLAT_MTX_LOCK(&bucket->mutex);
+
+        val = atomic_load_explicit(&mod->bits, memory_order_relaxed);
+        if (MAG_UNLIKELY(!(val & MAG_LOCKED) || !(val & MAG_HAS_WAITERS))) {
+            PLAT_MTX_UNLOCK(&bucket->mutex);
+            if (!is_fiber) {
+                PLAT_CND_DESTROY(&node.cond);
+            }
+            continue;
+        }
+
         node.next    = bucket->head;
         bucket->head = &node;
 
-        // Standard condition variable wait loop to handle spurious wakeups
-        while (!atomic_load_explicit(&node.signaled, memory_order_acquire)) {
-            PLAT_CND_WAIT(&node.cond, &bucket->mutex);
+        if (!is_fiber) {
+            // === OS THREAD SLEEP ===
+            while (!atomic_load_explicit(&node.signaled, memory_order_acquire)) {
+                PLAT_CND_WAIT(&node.cond, &bucket->mutex);
+            }
+            PLAT_MTX_UNLOCK(&bucket->mutex);
+            PLAT_CND_DESTROY(&node.cond);
+        } else {
+            // === FIBER YIELD ===
+            // Fibers don't need the bucket lock to wait!
+            // We drop it immediately so other threads/fibers can access the bucket.
+            PLAT_MTX_UNLOCK(&bucket->mutex);
+
+            while (!atomic_load_explicit(&node.signaled, memory_order_acquire)) {
+                MagThread_Yield(); // Give CPU back to the scheduler
+            }
+            // No destruction needed, fiber resumes natively.
         }
-
-        PLAT_MTX_UNLOCK(&bucket->mutex);
-        PLAT_CND_DESTROY(&node.cond);
-
-        // Note: Because we use a "Decoupled Unlock" strategy (the unlocker clears
-        // MAG_LOCKED before waking us), we wake up in an UNLOCKED state.
-        // We loop back to the start of Phase 2 to compete for the lock again.
     }
 }
 
 [[gnu::cold, gnu::noinline, gnu::visibility("hidden"), gnu::nonnull(1)]]
 void MagMutex_UnlockSlow(MagMutex *mod) {
-    uint8_t v = atomic_load_explicit(&mod->bits, memory_order_relaxed);
+    uint8_t val = atomic_load_explicit(&mod->bits, memory_order_relaxed);
     for (;;) {
-        uint8_t desired = v & ~MAG_LOCKED;
-        if (atomic_compare_exchange_weak_explicit(&mod->bits, &v, desired, memory_order_release,
+        uint8_t desired = val & ~MAG_LOCKED;
+        if (atomic_compare_exchange_weak_explicit(&mod->bits, &val, desired, memory_order_release,
                                                   memory_order_relaxed)) {
-            if (!(v & MAG_HAS_WAITERS))
+            if (!(val & MAG_HAS_WAITERS)) {
                 return;
+            }
             break;
         }
     }
@@ -298,23 +341,30 @@ void MagMutex_UnlockSlow(MagMutex *mod) {
             *curr   = to_wake->next;
             continue;
         }
-        if ((*curr)->address == mod)
+        if ((*curr)->address == mod) {
             more = true;
+        }
         curr = &((*curr)->next);
     }
 
     if (!more) {
-        v = atomic_load_explicit(&mod->bits, memory_order_relaxed);
+        val = atomic_load_explicit(&mod->bits, memory_order_relaxed);
         for (;;) {
-            if (atomic_compare_exchange_weak_explicit(&mod->bits, &v, v & ~MAG_HAS_WAITERS,
-                                                      memory_order_relaxed, memory_order_relaxed))
+            if (atomic_compare_exchange_weak_explicit(&mod->bits, &val, val & ~MAG_HAS_WAITERS,
+                                                      memory_order_relaxed, memory_order_relaxed)) {
                 break;
+            }
         }
     }
 
     if (to_wake != nullptr) {
         atomic_store_explicit(&to_wake->signaled, true, memory_order_release);
-        PLAT_CND_SIGNAL(&to_wake->cond);
+        if (!to_wake->fiber) {
+            // Only hit the kernel if it's an OS thread waiting
+            PLAT_CND_SIGNAL(&to_wake->cond);
+        }
+        // Note: If it IS a fiber, setting 'signaled = true' is enough.
+        // The fiber's yield loop will see it and break out.
     }
     PLAT_MTX_UNLOCK(&bucket->mutex);
 }
@@ -327,9 +377,16 @@ void MagCond_Wait(MagCond *condvar, MagMutex *mod) {
     size_t hash    = hash_address(condvar);
     Bucket *bucket = &parking_lot[hash];
 
-    Waiter node = {.address = condvar, .next = nullptr};
+    MagThread *current_thread = MagThread_GetCurrent();
+    bool is_fiber             = (bool)(current_thread != nullptr && !current_thread->is_main);
+
+    Waiter node = {
+        .address = condvar, .next = nullptr, .fiber = (int)is_fiber ? current_thread : nullptr};
     atomic_init(&node.signaled, false);
-    PLAT_CND_INIT(&node.cond);
+
+    if (!is_fiber) {
+        PLAT_CND_INIT(&node.cond);
+    }
 
     // Fast-path bit: let signalers know someone is waiting
     atomic_store_explicit(&condvar->bits, 1, memory_order_relaxed);
@@ -338,20 +395,27 @@ void MagCond_Wait(MagCond *condvar, MagMutex *mod) {
     PLAT_MTX_LOCK(&bucket->mutex);
     node.next    = bucket->head;
     bucket->head = &node;
-    PLAT_MTX_UNLOCK(&bucket->mutex);
 
-    // Step 2: Safely unlock the user's mutex.
-    // Any Thread calling Signal after this point will find our node.
-    MagMutex_Unlock(mod);
+    if (!is_fiber) {
+        // === OS THREAD PATH ===
+        PLAT_MTX_UNLOCK(&bucket->mutex);
+        MagMutex_Unlock(mod); // Unlock user's mutex
 
-    // Step 3: Wait for the signal
-    PLAT_MTX_LOCK(&bucket->mutex);
-    while (!atomic_load_explicit(&node.signaled, memory_order_acquire)) {
-        PLAT_CND_WAIT(&node.cond, &bucket->mutex);
+        PLAT_MTX_LOCK(&bucket->mutex);
+        while (!atomic_load_explicit(&node.signaled, memory_order_acquire)) {
+            PLAT_CND_WAIT(&node.cond, &bucket->mutex);
+        }
+        PLAT_MTX_UNLOCK(&bucket->mutex);
+        PLAT_CND_DESTROY(&node.cond);
+    } else {
+        // === FIBER PATH ===
+        PLAT_MTX_UNLOCK(&bucket->mutex); // Drop bucket lock immediately
+        MagMutex_Unlock(mod);            // Unlock user's mutex
+
+        while (!atomic_load_explicit(&node.signaled, memory_order_acquire)) {
+            MagThread_Yield(); // Yield CPU to other fibers
+        }
     }
-    PLAT_MTX_UNLOCK(&bucket->mutex);
-
-    PLAT_CND_DESTROY(&node.cond);
 
     // Step 4: Re-acquire the user's mutex before returning
     MagMutex_Lock(mod);
@@ -391,7 +455,9 @@ void MagCond_Signal(MagCond *condvar) {
 
     if (to_wake != nullptr) {
         atomic_store_explicit(&to_wake->signaled, true, memory_order_release);
-        PLAT_CND_SIGNAL(&to_wake->cond);
+        if (!to_wake->fiber) {
+            PLAT_CND_SIGNAL(&to_wake->cond);
+        }
     }
     PLAT_MTX_UNLOCK(&bucket->mutex);
 }
@@ -410,11 +476,11 @@ void MagCond_Broadcast(MagCond *condvar) {
 
     while (*curr != nullptr) {
         if ((*curr)->address == condvar) {
-            Waiter *w = *curr;
-            *curr     = w->next; // Unlink from bucket
+            Waiter *waiter = *curr;
+            *curr          = waiter->next; // Unlink from bucket
 
-            w->next   = wake_list; // Link to local stack wake_list
-            wake_list = w;
+            waiter->next = wake_list; // Link to local stack wake_list
+            wake_list    = waiter;
         } else {
             curr = &((*curr)->next);
         }
@@ -424,11 +490,16 @@ void MagCond_Broadcast(MagCond *condvar) {
 
     // Wake all extracted nodes
     while (wake_list != nullptr) {
-        Waiter *w = wake_list;
-        wake_list = w->next;
+        Waiter *waiter = wake_list;
+        wake_list      = waiter->next;
 
-        atomic_store_explicit(&w->signaled, true, memory_order_release);
-        PLAT_CND_SIGNAL(&w->cond);
+        atomic_store_explicit(&waiter->signaled, true, memory_order_release);
+        if (!waiter->fiber) {
+            // Only hit the kernel if it's an OS thread waiting
+            PLAT_CND_SIGNAL(&waiter->cond);
+        }
+        // Note: If it IS a fiber, setting 'signaled = true' is enough.
+        // The fiber's yield loop will see it and break out.
     }
     PLAT_MTX_UNLOCK(&bucket->mutex);
 }
