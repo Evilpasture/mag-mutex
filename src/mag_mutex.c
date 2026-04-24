@@ -187,7 +187,7 @@ static void init_parking_lot() {
 
 static inline size_t hash_address(const void *addr) {
     // MurmurHash3 constants for 64-bit finalizer
-    constexpr uint64_t MURMUR_MIXER = 0xff51afd7ed558ccdULL;
+    constexpr uint64_t MURMUR_MIXER         = 0xff51afd7ed558ccdULL;
     constexpr unsigned int MURMUR_BIT_SHIFT = 33U;
 
     uint64_t hash_val = (uintptr_t)addr;
@@ -211,11 +211,11 @@ void MagMutex_LockSlow(MagMutex *mod) {
     size_t backoff_limit = 1;
 
     for (int i = 0; i < MAX_SPIN_COUNT; i++) {
-        uint8_t v = atomic_load_explicit(&mod->bits, memory_order_relaxed);
+        uint8_t val = atomic_load_explicit(&mod->bits, memory_order_relaxed);
 
         // If the lock appears free, try to grab it.
-        if (!(v & MAG_LOCKED)) {
-            if (atomic_compare_exchange_weak_explicit(&mod->bits, &v, v | MAG_LOCKED,
+        if (!(val & MAG_LOCKED)) {
+            if (atomic_compare_exchange_weak_explicit(&mod->bits, &val, val | MAG_LOCKED,
                                                       memory_order_acquire, memory_order_relaxed)) {
                 mag_debug_post_lock(mod);
 #ifdef MAG_DEBUG
@@ -225,7 +225,7 @@ void MagMutex_LockSlow(MagMutex *mod) {
             }
         }
 
-        if (MAG_UNLIKELY(v & MAG_POISONED)) {
+        if (MAG_UNLIKELY(val & MAG_POISONED)) {
             return;
         }
 
@@ -242,11 +242,11 @@ void MagMutex_LockSlow(MagMutex *mod) {
 
     // --- PHASE 2: Parking ---
     for (;;) {
-        uint8_t v = atomic_load_explicit(&mod->bits, memory_order_relaxed);
+        uint8_t val = atomic_load_explicit(&mod->bits, memory_order_relaxed);
 
         // Final attempt to snatch the lock (Lock Stealing)
-        if (!(v & MAG_LOCKED)) {
-            if (atomic_compare_exchange_weak_explicit(&mod->bits, &v, v | MAG_LOCKED,
+        if (!(val & MAG_LOCKED)) {
+            if (atomic_compare_exchange_weak_explicit(&mod->bits, &val, val | MAG_LOCKED,
                                                       memory_order_acquire, memory_order_relaxed)) {
                 mag_debug_post_lock(mod);
                 return;
@@ -255,8 +255,8 @@ void MagMutex_LockSlow(MagMutex *mod) {
         }
 
         // Ensure the MAG_HAS_WAITERS bit is set before we actually sleep.
-        if (!(v & MAG_HAS_WAITERS)) {
-            if (!atomic_compare_exchange_weak_explicit(&mod->bits, &v, v | MAG_HAS_WAITERS,
+        if (!(val & MAG_HAS_WAITERS)) {
+            if (!atomic_compare_exchange_weak_explicit(&mod->bits, &val, val | MAG_HAS_WAITERS,
                                                        memory_order_relaxed,
                                                        memory_order_relaxed)) {
                 continue;
@@ -280,8 +280,8 @@ void MagMutex_LockSlow(MagMutex *mod) {
 
         PLAT_MTX_LOCK(&bucket->mutex);
 
-        v = atomic_load_explicit(&mod->bits, memory_order_relaxed);
-        if (MAG_UNLIKELY(!(v & MAG_LOCKED) || !(v & MAG_HAS_WAITERS))) {
+        val = atomic_load_explicit(&mod->bits, memory_order_relaxed);
+        if (MAG_UNLIKELY(!(val & MAG_LOCKED) || !(val & MAG_HAS_WAITERS))) {
             PLAT_MTX_UNLOCK(&bucket->mutex);
             if (!is_fiber) {
                 PLAT_CND_DESTROY(&node.cond);
@@ -315,12 +315,12 @@ void MagMutex_LockSlow(MagMutex *mod) {
 
 [[gnu::cold, gnu::noinline, gnu::visibility("hidden"), gnu::nonnull(1)]]
 void MagMutex_UnlockSlow(MagMutex *mod) {
-    uint8_t v = atomic_load_explicit(&mod->bits, memory_order_relaxed);
+    uint8_t val = atomic_load_explicit(&mod->bits, memory_order_relaxed);
     for (;;) {
-        uint8_t desired = v & ~MAG_LOCKED;
-        if (atomic_compare_exchange_weak_explicit(&mod->bits, &v, desired, memory_order_release,
+        uint8_t desired = val & ~MAG_LOCKED;
+        if (atomic_compare_exchange_weak_explicit(&mod->bits, &val, desired, memory_order_release,
                                                   memory_order_relaxed)) {
-            if (!(v & MAG_HAS_WAITERS)) {
+            if (!(val & MAG_HAS_WAITERS)) {
                 return;
             }
             break;
@@ -348,9 +348,9 @@ void MagMutex_UnlockSlow(MagMutex *mod) {
     }
 
     if (!more) {
-        v = atomic_load_explicit(&mod->bits, memory_order_relaxed);
+        val = atomic_load_explicit(&mod->bits, memory_order_relaxed);
         for (;;) {
-            if (atomic_compare_exchange_weak_explicit(&mod->bits, &v, v & ~MAG_HAS_WAITERS,
+            if (atomic_compare_exchange_weak_explicit(&mod->bits, &val, val & ~MAG_HAS_WAITERS,
                                                       memory_order_relaxed, memory_order_relaxed)) {
                 break;
             }

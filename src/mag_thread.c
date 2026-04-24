@@ -20,7 +20,7 @@ extern void mag_trampoline_asm(void);
 static thread_local MagThread t_main_thread;
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 static thread_local MagThread *t_current_thread = nullptr;
-
+// NOLINTNEXTLINE(misc-use-internal-linkage)
 void mag_trampoline(void);
 // Real C entry point called by mag_asm
 void mag_trampoline(void) {
@@ -53,9 +53,9 @@ static size_t get_page_size(void) {
     GetSystemInfo(&sys_info);
     return (size_t)sys_info.dwPageSize;
 #else
-    long sz = sysconf(_SC_PAGESIZE);
+    long size = sysconf(_SC_PAGESIZE);
     // If sysconf fails, it returns -1. We provide a sane 4KB default.
-    return (sz > 0) ? (size_t)sz : 4096;
+    return (size > 0) ? (size_t)size : 4096;
 #endif
 }
 
@@ -111,16 +111,17 @@ MagThread *MagThread_Create(size_t stack_size, MagThreadFunc func, void *arg) {
 
 #if defined(_WIN32)
     uintptr_t limit_addr = (uintptr_t)map + page_size;
-    
+
     // Copy the bits of the integer directly into the pointer
-    memcpy((void *)&thread->stack_base,  &end_addr,   sizeof(void *));
+    memcpy((void *)&thread->stack_base, &end_addr, sizeof(void *));
     memcpy((void *)&thread->stack_limit, &limit_addr, sizeof(void *));
 #endif
 
     uintptr_t stack_pointer = (uintptr_t)thread;
     // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers, readability-magic-numbers)
-    static_assert(alignof(MagThread) % 16 == 0, 
-    "MagThread struct alignment must be a multiple of 16 to ensure the stack starts aligned");
+    static_assert(
+        alignof(MagThread) % 16 == 0,
+        "MagThread struct alignment must be a multiple of 16 to ensure the stack starts aligned");
 
 #if defined(_WIN32) && (defined(__x86_64__) || defined(_M_X64))
     // Symmetry: 8 (Ret) + 8 (Dummy) + 64 (GPR) + 160 (XMM) = 240
@@ -130,17 +131,17 @@ MagThread *MagThread_Create(size_t stack_size, MagThreadFunc func, void *arg) {
 
     // Using the constants defined in the previous working block:
     // NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers, readability-magic-numbers)
-    static_assert(WIN64_TOTAL % 16 == 0, 
-        "Windows x64 total stack frame must be a multiple of 16 for movaps alignment");
-    
-    static_assert(WIN64_TOTAL == 240, 
-        "Windows x64 stack frame size changed; check mag_asm.S synchronization");
-        
+    static_assert(WIN64_TOTAL % 16 == 0,
+                  "Windows x64 total stack frame must be a multiple of 16 for movaps alignment");
+
+    static_assert(WIN64_TOTAL == 240,
+                  "Windows x64 stack frame size changed; check mag_asm.S synchronization");
+
     static_assert((WIN64_CTX_SZ + 8) == WIN64_TOTAL,
-        "Windows x64 Context + Return Address mismatch");
+                  "Windows x64 Context + Return Address mismatch");
     // NOLINTEND(cppcoreguidelines-avoid-magic-numbers, readability-magic-numbers)
 
-    void *dest_ptr = nullptr;
+    void *dest_ptr         = nullptr;
     uintptr_t val_to_write = 0;
 
     // 1. Align stack pointer (thread starts 16-aligned)
@@ -149,19 +150,19 @@ MagThread *MagThread_Create(size_t stack_size, MagThreadFunc func, void *arg) {
 
     // 2. The 'ret' in mag_switch happens after 'add 160' and 'pop 9' (160+72=232)
     uintptr_t ret_addr_loc = stack_pointer + WIN64_CTX_SZ;
-    val_to_write = (uintptr_t)mag_trampoline_asm;
-    memcpy((void*)&dest_ptr, &ret_addr_loc, sizeof(void *));
+    val_to_write           = (uintptr_t)mag_trampoline_asm;
+    memcpy((void *)&dest_ptr, &ret_addr_loc, sizeof(void *));
     memcpy(dest_ptr, &val_to_write, sizeof(uintptr_t));
 
     // 3. Zero the context
-    memcpy((void*)&dest_ptr, &stack_pointer, sizeof(void *));
+    memcpy((void *)&dest_ptr, &stack_pointer, sizeof(void *));
     memset(dest_ptr, 0, WIN64_CTX_SZ);
 
     // Save the pointer
     memcpy((void *)&thread->stack_pointer, &stack_pointer, sizeof(void *));
 #elif defined(__x86_64__) || defined(_M_X64)
-    [[maybe_unused]] constexpr size_t SYSV_GPR_STORAGE  = 48ULL; // 6 registers (rbx, rbp, r12-r15)
-    
+    [[maybe_unused]] constexpr size_t SYSV_GPR_STORAGE = 48ULL; // 6 registers (rbx, rbp, r12-r15)
+
     static_assert(SYSV_GPR_STORAGE % 8 == 0, "System V GPR storage must be 8-byte multiples");
     // System V ABI (Linux/macOS): Only 6 GPRs are callee-saved
     void *dest_ptr;
@@ -170,32 +171,33 @@ MagThread *MagThread_Create(size_t stack_size, MagThreadFunc func, void *arg) {
     // 1. Set Trampoline (Initial RIP)
     stack_pointer -= GPR_SIZE;
     val_to_write = (uintptr_t)mag_trampoline_asm;
-    memcpy((void*)&dest_ptr, &stack_pointer, sizeof(void *));
+    memcpy((void *)&dest_ptr, &stack_pointer, sizeof(void *));
     memcpy(dest_ptr, &val_to_write, GPR_SIZE);
 
     // 2. Zero the saved register area (RBX, RBP, R12-R15)
     stack_pointer -= SYSV_GPR_STORAGE;
-    memcpy((void*)&dest_ptr, &stack_pointer, sizeof(void *));
+    memcpy((void *)&dest_ptr, &stack_pointer, sizeof(void *));
     memset(dest_ptr, 0, SYSV_GPR_STORAGE);
 
 #elif defined(__aarch64__) || defined(_M_ARM64)
-    [[maybe_unused]] constexpr size_t ARM64_CONTEXT_SZ  = 160ULL;
+    [[maybe_unused]] constexpr size_t ARM64_CONTEXT_SZ = 160ULL;
+    constexpr size_t GPR_SIZE = 8ULL; // Each general-purpose register is 8 bytes
     // ARM64: Save area for X19-X30 and D8-D15
     void *dest_ptr;
     uintptr_t val_to_write;
 
     // 1. Zero out the context save area
     stack_pointer -= ARM64_CONTEXT_SZ;
-    memcpy((void*)&dest_ptr, &stack_pointer, sizeof(void *));
+    memcpy((void *)&dest_ptr, &stack_pointer, sizeof(void *));
     memset(dest_ptr, 0, ARM64_CONTEXT_SZ);
-    
+
     // 2. Set Trampoline into the Link Register (x30) slot
     // Offset 88 is typically where x30 (LR) is stored in the save block
     uintptr_t lr_offset = 11ULL * GPR_SIZE;
     uintptr_t lr_addr   = stack_pointer + lr_offset;
-    val_to_write = (uintptr_t)mag_trampoline_asm;
-    
-    memcpy((void*)&dest_ptr, &lr_addr, sizeof(void *));
+    val_to_write        = (uintptr_t)mag_trampoline_asm;
+
+    memcpy((void *)&dest_ptr, &lr_addr, sizeof(void *));
     memcpy(dest_ptr, &val_to_write, GPR_SIZE);
 #endif
 
@@ -206,15 +208,15 @@ MagThread *MagThread_Create(size_t stack_size, MagThreadFunc func, void *arg) {
 }
 
 void MagThread_Resume(MagThread *target) {
-    MagThread *self  = t_current_thread;
-    target->caller = self;
+    MagThread *self = t_current_thread;
+    target->caller  = self;
     mag_swap_teb(target);
     t_current_thread = target;
     mag_switch(&self->stack_pointer, target->stack_pointer);
 }
 
 void MagThread_Yield(void) {
-    MagThread *self     = t_current_thread;
+    MagThread *self   = t_current_thread;
     MagThread *target = self->caller;
     if (!target) {
         return;
