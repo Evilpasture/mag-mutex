@@ -100,7 +100,11 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
     endif()
 
     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-        # This prevents GCC from being too aggressive with hidden symbols in .a files
+        # Ensure GCC produces standard object code alongside LTO bytecode
+        add_compile_options(-ffat-lto-objects)
+        
+        # Increase visibility for the static library's public API
+        # so the test executables can see the symbols
         target_compile_options(mag_mutex_lib PRIVATE -fvisibility=default)
     endif()
 
